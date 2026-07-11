@@ -8,6 +8,11 @@ Build a fair, fully-covered, cost-aware weekly schedule in a few clicks — with
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-Vitest-6E9F18?logo=vitest&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-A31F34)
+![Status](https://img.shields.io/badge/status-work_in_progress-E3A008)
+
+> 🚧 **Work in progress** — this project is under active development and will keep changing.
+> It's **free to use, fork, and modify** for any purpose. See [License](#license).
 
 ---
 
@@ -127,6 +132,10 @@ src/
 | Generate | Results & calendar |
 | --- | --- |
 | _add screenshot_ | _add screenshot_ |
+
+## License
+
+Released under the **MIT License** — you're free to use, copy, modify, and distribute this project, including for commercial use. See [`LICENSE`](LICENSE) for the full text.
 
 ---
 
