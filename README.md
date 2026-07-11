@@ -16,16 +16,47 @@ Build a fair, fully-covered, cost-aware weekly schedule in a few clicks — with
 
 ---
 
-## What it does
+## ⬇️ Download & install
 
-VolunteerShift AI takes your **team** (who can do what, when they're free, and their weekly limits) and your **shifts** (when, where, which role, how many people, and any staffing rules) and produces a complete weekly schedule that:
+### Windows (installer)
 
-- **Covers every shift** it possibly can, prioritizing urgent work first
-- **Respects the rules** — role fit, availability, weekly shift/hour limits, no overlaps, required supervisors, and minimum/maximum paid staffing
+1. Open the [**latest release**](https://github.com/HeroicSwan/volunteershift-ai/releases/latest) and download **`VolunteerShift.AI.Setup.0.1.0.exe`**.
+2. Double-click it. It's a **one-click installer** — no admin rights needed — that adds Start-Menu and desktop shortcuts and opens the app when it finishes.
+3. **First launch:** because the app isn't code-signed yet, Windows SmartScreen may say *"Windows protected your PC."* Click **More info → Run anyway**. This is normal for new indie apps and only happens once.
+
+The desktop app runs **completely offline** in its own window — no browser, no account, no internet required. Your data stays on your computer.
+
+### macOS & Linux
+
+Prebuilt downloads aren't posted yet. You can build one on that machine — see [Desktop app](#desktop-app-windows--macos--linux) (`npm run dist:mac` or `npm run dist:linux`).
+
+### Prefer to run it in a browser?
+
+Run it locally with Node.js (see [Getting started](#getting-started)), or deploy it to any Next.js host.
+
+---
+
+## What is VolunteerShift AI?
+
+VolunteerShift AI is a **weekly scheduling tool for organizations that run on a mix of volunteers and paid staff** — food banks, shelters, community events, clinics, faith groups, and any nonprofit that has to work out *who covers which shift this week.* It replaces the fragile spreadsheet with a tool that fills the schedule for you, fairly and cheaply, and can explain every choice.
+
+You give it two things:
+
+- **Your team** — each person's qualified role(s), their weekly availability (by day and time block), preferred days/roles, a reliability score, weekly shift/hour limits, and (for paid people) an hourly rate. Everyone is one of three types: **Volunteers**, **Paid Employees**, or **Supervisors / Leads**.
+- **Your shifts** — when and where help is needed, which role, how many people, a priority (Low → Urgent), and any rules such as *requires a supervisor* or *at least N paid staff.*
+
+Press **Generate**, and it produces a complete weekly schedule that:
+
+- **Covers every shift** it possibly can, staffing urgent and hard-to-fill work first
+- **Respects the rules** — role fit, availability, weekly shift/hour limits, no double-booking, required supervisors, and minimum/maximum paid staffing
 - **Keeps costs down** — once coverage is safe, it fills routine work with free volunteers and spends paid hours only where a rule or a shortage requires it
-- **Explains itself** — every assignment shows a 0–100 match score plus plain-language reasons and warnings. No black-box AI decides who works; the scheduling is 100% deterministic logic.
+- **Explains itself** — every assignment shows a 0–100 match score with plain-language reasons and warnings. **No black-box AI decides who works** — the scheduling is 100% deterministic logic you can audit and explain to your board.
 
-All data lives in your browser (localStorage) — no account, no server, no database required.
+Everything runs on your own device — **no account, no server, no database.** Your data is stored locally on your machine.
+
+### Who it's for
+
+Volunteer coordinators, shift managers, and small-team leads who currently juggle a spreadsheet and want a faster, fairer, more transparent way to staff the week — without paying for heavyweight enterprise workforce software.
 
 ## Pages
 
