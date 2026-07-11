@@ -17,8 +17,13 @@
 /.next/
 /out/
 
-# production
-/build
+# generated brand icons (regenerated from build/icon.svg via `npm run icons`)
+/build/*.ico
+/build/*.icns
+/build/*.png
+
+# electron-builder installers
+/dist
 
 # misc
 .DS_Store

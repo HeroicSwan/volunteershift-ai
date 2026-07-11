@@ -1,0 +1,49 @@
+appId: com.heroicswan.volunteershift
+productName: VolunteerShift AI
+copyright: © 2026 HeroicSwan
+
+directories:
+  output: dist
+  buildResources: build
+
+# Only ship the Electron entry + the static export. None of the web app's
+# node_modules (next, react, openai…) are needed at runtime, so exclude them
+# — the desktop app is just the static `out/` served over a custom protocol.
+files:
+  - electron/**/*
+  - out/**/*
+  - package.json
+  - "!node_modules/**/*"
+
+extraMetadata:
+  main: electron/main.cjs
+
+win:
+  target: nsis
+  icon: build/icon.ico
+
+mac:
+  target: dmg
+  icon: build/icon.icns
+  category: public.app-category.productivity
+
+linux:
+  target: AppImage
+  icon: build/icon.png
+  category: Office
+  synopsis: Nonprofit staff & volunteer scheduler
+
+# Clean, minimal one-click installer branded with the app icon.
+nsis:
+  oneClick: true
+  perMachine: false
+  runAfterFinish: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: VolunteerShift AI
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+
+dmg:
+  title: VolunteerShift AI

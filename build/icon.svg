@@ -1,0 +1,11 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="1024" rx="232" fill="#445022"/>
+  <!-- stem -->
+  <path d="M512 792 V 470" fill="none" stroke="#e8dcc7" stroke-width="56" stroke-linecap="round"/>
+  <!-- right leaf (higher) -->
+  <path d="M512 560 C 512 424 604 342 742 340 C 758 470 664 560 512 560 Z" fill="#e8dcc7"/>
+  <!-- left leaf (lower) -->
+  <path d="M512 636 C 512 512 428 438 306 436 C 292 556 378 636 512 636 Z" fill="#8b9d83"/>
+  <!-- soil accent -->
+  <path d="M360 812 H 664" fill="none" stroke="#c66b3d" stroke-width="40" stroke-linecap="round"/>
+</svg>

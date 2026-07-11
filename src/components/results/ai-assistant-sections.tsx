@@ -16,6 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { generateFallbackAssistant } from "@/lib/ai-fallback";
 import type {
   AiAssistantInput,
   AiAssistantResult,
@@ -137,7 +138,13 @@ export function AiAssistantSections({ input }: { input: AiAssistantInput }) {
         setAssistant(result);
       } catch (requestError) {
         if (requestError instanceof DOMException && requestError.name === "AbortError") return;
-        setError("The schedule assistant could not load. Your generated schedule is still available below.");
+        // No API route (desktop build) or an offline/network failure — compute
+        // the built-in schedule summary locally so this section still works.
+        try {
+          setAssistant(generateFallbackAssistant(input, "Showing the built-in offline schedule summary."));
+        } catch {
+          setError("The schedule assistant could not load. Your generated schedule is still available below.");
+        }
       }
     }
 

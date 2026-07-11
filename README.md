@@ -105,6 +105,24 @@ OPENAI_MODEL=gpt-5.4-mini
 
 > The scheduling itself never uses AI — assignments are always deterministic. AI only writes an optional plain-English recap.
 
+## Desktop app (Windows / macOS / Linux)
+
+VolunteerShift AI also ships as a native desktop app built with [Electron](https://www.electronjs.org/) — a fully offline static build served inside a branded window, no server or browser required.
+
+```bash
+npm run icons        # regenerate brand icons from build/icon.svg
+npm run dist:win     # Windows installer (.exe)   → dist/
+npm run dist:mac     # macOS installer (.dmg)      → run on macOS
+npm run dist:linux   # Linux AppImage              → run on Linux
+```
+
+The result is a clean one-click installer branded with the app icon. Built installers land in `dist/` (git-ignored) — publish them via **GitHub Releases** rather than committing them. To run the desktop shell against the live dev server while developing:
+
+```bash
+npm run dev                                                    # terminal 1
+set ELECTRON_START_URL=http://localhost:3000 && npm run desktop  # terminal 2 (Windows)
+```
+
 ## Project structure
 
 ```
