@@ -180,7 +180,8 @@ describe("deterministic scheduler repair scenarios", () => {
     const fallback = generateOptimizedSchedule([general[0]], [
       shift("emergency-role", "2026-07-14", { requiredRole: "Driver" }),
     ]);
-    expect(fallback.assignments[0].warnings.some((warning) => warning.includes("Emergency role mismatch"))).toBe(true);
+    expect(fallback.assignments).toHaveLength(0);
+    expect(fallback.shiftResults[0].coverageStatus).toBe("uncovered");
   });
 
   it("7. uses reliable paid coverage for a scarce urgent shift and explains cost", () => {

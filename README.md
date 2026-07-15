@@ -63,7 +63,7 @@ Volunteer coordinators, shift managers, and small-team leads who currently juggl
 | Page | What it does |
 |------|--------------|
 | **Dashboard** | At-a-glance overview: team size, worker-hours needed, current coverage %, uncovered shifts, and weekly staffing demand. Load the demo workspace or jump straight to generating a schedule. |
-| **Workers** | Manage everyone on your team — volunteers, paid employees, and supervisors. Set roles, weekly availability by day/time block, preferred days & roles, reliability score, hourly rate (paid only), and weekly limits. Filter by type or role, and import/export as CSV. |
+| **Staff** | Manage everyone on your team — volunteers, paid employees, and supervisors. Set roles, weekly availability by day/time block, preferred days & roles, reliability score, hourly rate (paid only), and weekly limits. Filter by type or role, and import/export as CSV. |
 | **Shifts** | Define each shift: date, time, location, required role, how many workers, priority, whether it **requires a supervisor**, and **min/max paid staff**. Import/export as CSV. |
 | **Generate** | One click builds the schedule with the deterministic optimizer and takes you to the results. |
 | **Results** | The heart of the app — a monthly **calendar** (supervisors in red, paid staff in blue, volunteers in green, with names and times), plus **coverage %**, **estimated labor cost**, **staffing mix**, **fairness stats**, a **risk panel** flagging any at-risk shifts, and a per-assignment breakdown of match scores and reasons. Export the whole schedule to CSV. |
@@ -122,7 +122,22 @@ npm run build   # production build
 npm run start   # serve the production build
 npm test        # run the test suite
 npm run lint    # lint
+npm run typecheck # strict TypeScript check
 ```
+
+## Reliability and evaluations
+
+The production scheduler is exercised directly—the evaluation harness does not contain a second or simplified scheduling implementation.
+
+```bash
+npm test                 # 63 unit and regression tests
+npm run eval             # 29 deterministic contract scenarios
+npm run eval:adversarial # manual deep reliability and scale suite
+```
+
+The latest verified run passed all 115 hand-authored adversarial scenarios, 1,000 seeded property schedules, 23 hostile-input checks, and 20/20 validator mutations. The standard suite, typecheck, lint, and production build also pass.
+
+The full adversarial command intentionally returns a nonzero exit code while two scale limits remain visible: 250 workers / 1,000 shifts exceeds its 30-second process budget, and 500 workers / 2,000 shifts exceeds 45 seconds. Small and ordinary nonprofit schedules remain fully covered by the exhaustive repair and fairness passes; large workloads use bounded work. Runtime results are machine-dependent. See [EVALUATIONS.md](EVALUATIONS.md) and the concise reports in [`evals/reports`](evals/reports).
 
 ## Configuration (optional)
 
@@ -158,7 +173,7 @@ set ELECTRON_START_URL=http://localhost:3000 && npm run desktop  # terminal 2 (W
 
 ```
 src/
-  app/            # routes: dashboard, workers, shifts, generate, results, api
+  app/            # routes: dashboard, staff, shifts, generate, results, api
   components/     # UI, forms, dialogs, calendar, CSV import, results sections
   lib/
     scheduler.ts  # the deterministic, cost-aware optimizer (+ tests)
@@ -171,16 +186,13 @@ src/
 
 ## Screenshots
 
-<!-- Tip: open this README in GitHub's editor and drag each screenshot into the slots below —
-     GitHub uploads and links them automatically, no commit needed. -->
-
-| Dashboard | Workers | Shifts |
+| Dashboard | Staff | Shifts |
 | --- | --- | --- |
-| _add screenshot_ | _add screenshot_ | _add screenshot_ |
+| ![Dashboard showing complete weekly coverage](public/screenshots/dashboard.png) | ![Staff roster with paid staff and volunteer tabs](public/screenshots/staff.png) | ![Shift cards and staffing requirements](public/screenshots/shifts.png) |
 
 | Generate | Results & calendar |
 | --- | --- |
-| _add screenshot_ | _add screenshot_ |
+| ![Deterministic schedule generation screen](public/screenshots/generate.png) | ![Schedule results with coverage and monthly calendar](public/screenshots/results.png) |
 
 ## License
 

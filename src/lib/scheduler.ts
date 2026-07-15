@@ -167,6 +167,14 @@ function buildSchedulingPlan(shifts: Shift[], strategy: "balanced" | "forward" |
 
 function buildSchedulingPlans(shifts: Shift[]) {
   const longestWeek = Math.max(1, ...getDatesByWeek(shifts).map(([, dates]) => dates.length));
+  if (shifts.length > 50) return [buildSchedulingPlan(shifts, "balanced")];
+  if (shifts.length > 20) {
+    return [
+      buildSchedulingPlan(shifts, "balanced"),
+      buildSchedulingPlan(shifts, "reverse"),
+      buildSchedulingPlan(shifts, "forward"),
+    ];
+  }
   const plans = [buildSchedulingPlan(shifts, "balanced"), buildSchedulingPlan(shifts, "reverse")];
   for (let offset = 0; offset < longestWeek; offset += 1) {
     plans.push(buildSchedulingPlan(shifts, "forward", offset));
@@ -181,7 +189,8 @@ function getDesiredHours(worker: Worker) {
 
 function getMaxHours(worker: Worker) {
   const legacy = worker as Worker & { hoursPerWeek?: number };
-  return worker.maxHoursPerWeek ?? legacy.hoursPerWeek ?? Math.min(40, worker.maxShiftsPerWeek * 4);
+  const configured = worker.maxHoursPerWeek ?? legacy.hoursPerWeek ?? Math.min(40, worker.maxShiftsPerWeek * 4);
+  return isPaidWorker(worker.workerType) ? Math.min(40, configured) : configured;
 }
 
 function getWorkerWeekAssignments(workerId: string, assignments: ScheduleAssignment[], weekKey?: string) {
@@ -228,10 +237,10 @@ function buildSlots(shift: Shift) {
 
 function availableUntil(worker: Worker, shift: Shift, startTime: string) {
   const start = timeToMinutes(startTime);
-  const block = (worker.availability[getShiftDay(shift)] ?? []).find(
-    (item) => timeToMinutes(item.start) <= start && timeToMinutes(item.end) > start,
-  );
-  return block ? Math.min(timeToMinutes(block.end), timeToMinutes(shift.endTime)) : start;
+  const availableEnd = (worker.availability[getShiftDay(shift)] ?? [])
+    .filter((item) => timeToMinutes(item.start) <= start && timeToMinutes(item.end) > start)
+    .reduce((latest, item) => Math.max(latest, timeToMinutes(item.end)), start);
+  return Math.min(availableEnd, timeToMinutes(shift.endTime));
 }
 
 function isAvailable(worker: Worker, shift: Shift) {
@@ -381,8 +390,8 @@ export function calculateMatchScore(
 
   if (!isAvailable(worker, shift)) return { eligible: false, score: 0, reasons, warnings: ["Not available for the full assignment"] };
   if (!worker.roles.includes(shift.requiredRole)) return { eligible: false, score: 0, reasons, warnings: [`Not qualified for ${shift.requiredRole}`] };
-  if (worker.workerType === "volunteer" && assignments.some((assignment) => assignment.workerId === worker.id && assignment.shiftId === shift.id)) {
-    return { eligible: false, score: 0, reasons, warnings: ["Volunteer already has an assignment in this operating window"] };
+  if (assignments.some((assignment) => assignment.workerId === worker.id && assignment.shiftId === shift.id)) {
+    return { eligible: false, score: 0, reasons, warnings: ["Worker already has an assignment in this operating window"] };
   }
   if (weekAssignments >= worker.maxShiftsPerWeek) return { eligible: false, score: 0, reasons, warnings: ["Weekly shift limit reached"] };
   if (assignmentHours > getSingleShiftLimit(worker)) return { eligible: false, score: 0, reasons, warnings: [`Assignment exceeds the ${getSingleShiftLimit(worker)}-hour shift limit`] };
@@ -675,18 +684,27 @@ function getDailyRosterBlock(worker: Worker, shift: Shift, assignments: Schedule
     const end = Math.min(start + 4 * 60, timeToMinutes(block.end), timeToMinutes(shift.endTime));
     return end - start >= 3 * 60 ? { startTime: minutesToTime(start), endTime: minutesToTime(end) } : undefined;
   }
-  if (worker.employmentType === "part_time") {
-    return { startTime: "08:00", endTime: "14:00" };
-  }
   const dayAssignments = getShiftAssignments(shift, assignments);
   const comparable = worker.workerType === "supervisor"
     ? dayAssignments.filter((assignment) => assignment.workerType === "supervisor")
     : dayAssignments.filter((assignment) => assignment.worker.employmentType === "full_time");
-  const earlyCount = comparable.filter((assignment) => assignment.startTime === "08:00").length;
-  const lateCount = comparable.filter((assignment) => assignment.startTime === "10:00").length;
-  return earlyCount <= lateCount
-    ? { startTime: "08:00", endTime: "16:00" }
-    : { startTime: "10:00", endTime: "18:00" };
+  const earlyStart = minutesToTime(Math.max(timeToMinutes("08:00"), timeToMinutes(shift.startTime)));
+  const lateStart = minutesToTime(Math.max(timeToMinutes("10:00"), timeToMinutes(shift.startTime)));
+  const earlyCount = comparable.filter((assignment) => assignment.startTime === earlyStart).length;
+  const lateCount = comparable.filter((assignment) => assignment.startTime === lateStart).length;
+  const preferredStart = worker.employmentType === "part_time"
+    ? "08:00"
+    : earlyCount <= lateCount ? "08:00" : "10:00";
+  const block = (worker.availability[getShiftDay(shift)] ?? [])
+    .filter((item) => timeToMinutes(item.end) > Math.max(timeToMinutes(preferredStart), timeToMinutes(shift.startTime)))
+    .sort((a, b) => timeToMinutes(b.end) - timeToMinutes(a.end))[0];
+  if (!block) return undefined;
+  const start = Math.max(timeToMinutes(preferredStart), timeToMinutes(shift.startTime), timeToMinutes(block.start));
+  const desiredMinutes = worker.employmentType === "part_time" ? 6 * 60 : 8 * 60;
+  const end = Math.min(start + desiredMinutes, timeToMinutes(shift.endTime), timeToMinutes(block.end));
+  return end - start >= SLOT_MINUTES
+    ? { startTime: minutesToTime(start), endTime: minutesToTime(end) }
+    : undefined;
 }
 
 function rankDailyRosterCandidates(
@@ -712,6 +730,40 @@ function rankDailyRosterCandidates(
     );
 }
 
+function getDailyRosterHours(shift: Shift, assignments: ScheduleAssignment[]) {
+  return getShiftAssignments(shift, assignments).reduce(
+    (sum, assignment) => sum + getAssignmentDurationHours(assignment),
+    0,
+  );
+}
+
+function selectDailyRosterCandidate(
+  shift: Shift,
+  candidates: Candidate[],
+  completionPool: Worker[],
+  assignments: ScheduleAssignment[],
+  rosterTarget: number,
+) {
+  const assigned = getShiftAssignments(shift, assignments);
+  const requiredHours = shift.requiredWorkerHours ?? shift.requiredWorkers * 8;
+  const remainingSlots = rosterTarget - assigned.length - 1;
+  return candidates.find((candidate) => {
+    const hoursAfterCandidate = getDailyRosterHours(shift, assignments) + durationHours(candidate.segment.startTime, candidate.segment.endTime);
+    if (hoursAfterCandidate >= requiredHours) return true;
+    if (remainingSlots <= 0) return false;
+    const possibleRemainingHours = rankDailyRosterCandidates(
+      shift,
+      completionPool.filter((worker) => worker.id !== candidate.worker.id),
+      assignments,
+    )
+      .map((item) => durationHours(item.segment.startTime, item.segment.endTime))
+      .sort((a, b) => b - a)
+      .slice(0, remainingSlots)
+      .reduce((sum, hours) => sum + hours, 0);
+    return hoursAfterCandidate + possibleRemainingHours >= requiredHours;
+  });
+}
+
 function assignDailyRosterShift(shift: Shift, workers: Worker[], assignments: ScheduleAssignment[]) {
   const managerTarget = shift.requiredSupervisors ?? (shift.requiresSupervisor ? 1 : 0);
   while (getShiftAssignments(shift, assignments).filter((assignment) => assignment.workerType === "supervisor").length < managerTarget) {
@@ -723,9 +775,10 @@ function assignDailyRosterShift(shift: Shift, workers: Worker[], assignments: Sc
     if (!manager) break;
     commitCandidate(manager, shift, assignments, `Fills manager ${getShiftAssignments(shift, assignments).filter((assignment) => assignment.workerType === "supervisor").length + 1} of ${managerTarget}`);
   }
+  if (getShiftAssignments(shift, assignments).filter((assignment) => assignment.workerType === "supervisor").length < managerTarget) return;
 
   const rosterTarget = Math.min(shift.requiredWorkers, shift.maxDailyWorkers ?? shift.requiredWorkers);
-  const preferredVolunteer = rankDailyRosterCandidates(
+  const preferredVolunteers = rankDailyRosterCandidates(
     shift,
     workers.filter(
       (worker) =>
@@ -734,21 +787,42 @@ function assignDailyRosterShift(shift: Shift, workers: Worker[], assignments: Sc
         countWorkerHours(worker.id, assignments, getWeekKey(shift.date)) < getDesiredHours(worker),
     ),
     assignments,
-  )[0];
+  );
+  const preferredVolunteer = selectDailyRosterCandidate(
+    shift,
+    preferredVolunteers,
+    workers.filter((worker) => isPaidWorker(worker.workerType)),
+    assignments,
+    rosterTarget,
+  );
   if (preferredVolunteer && getShiftAssignments(shift, assignments).length < rosterTarget) {
     commitCandidate(preferredVolunteer, shift, assignments, "Adds preference-aware volunteer support");
   }
   while (getShiftAssignments(shift, assignments).length < rosterTarget) {
-    const paid = rankDailyRosterCandidates(
+    const paidCandidates = rankDailyRosterCandidates(
       shift,
       workers.filter((worker) => isPaidWorker(worker.workerType)),
       assignments,
-    )[0];
-    const volunteer = paid ? undefined : rankDailyRosterCandidates(
+    );
+    const paid = selectDailyRosterCandidate(
+      shift,
+      paidCandidates,
+      workers.filter((worker) => isPaidWorker(worker.workerType)),
+      assignments,
+      rosterTarget,
+    ) ?? paidCandidates[0];
+    const volunteerCandidates = paid ? [] : rankDailyRosterCandidates(
       shift,
       workers.filter((worker) => worker.workerType === "volunteer"),
       assignments,
-    )[0];
+    );
+    const volunteer = selectDailyRosterCandidate(
+      shift,
+      volunteerCandidates,
+      workers,
+      assignments,
+      rosterTarget,
+    ) ?? volunteerCandidates[0];
     const selected = paid ?? volunteer;
     if (!selected) break;
     commitCandidate(
@@ -828,6 +902,79 @@ function fullShiftCandidate(worker: Worker, shift: Shift, assignments: ScheduleA
   return { worker, segment: shift, evaluation, ...getCandidateBalance(worker, shift, assignments) };
 }
 
+function rankLargeShiftWorkers(shift: Shift, workers: Worker[], assignments: ScheduleAssignment[]) {
+  const week = getWeekKey(shift.date);
+  const assignmentHours = shiftDurationHours(shift);
+  return workers
+    .flatMap((worker) => {
+      const workerAssignments = assignments.filter((assignment) => assignment.workerId === worker.id);
+      const weekAssignments = workerAssignments.filter((assignment) => getWeekKey(assignment.shift.date) === week);
+      const weekHours = round(weekAssignments.reduce((sum, assignment) => sum + getAssignmentDurationHours(assignment), 0));
+      const conflicts = workerAssignments.some(
+        (assignment) =>
+          assignment.shift.date === shift.date &&
+          shift.startTime < assignmentEndTime(assignment) &&
+          shift.endTime > assignmentStartTime(assignment),
+      );
+      if (
+        !worker.roles.includes(shift.requiredRole) ||
+        !isAvailable(worker, shift) ||
+        workerAssignments.some((assignment) => assignment.shiftId === shift.id) ||
+        weekAssignments.length >= worker.maxShiftsPerWeek ||
+        assignmentHours > getSingleShiftLimit(worker) ||
+        weekHours + assignmentHours > getMaxHours(worker) ||
+        conflicts
+      ) return [];
+      const preference = (worker.preferredDays.includes(getShiftDay(shift)) ? 2 : 0) +
+        (worker.preferredRoles.includes(shift.requiredRole) ? 2 : 0) +
+        (worker.reliabilityScore ?? 3) / 5;
+      return [{ worker, weekHours, load: weekHours / Math.max(getDesiredHours(worker), 1), preference }];
+    })
+    .sort((a, b) =>
+      a.load - b.load ||
+      a.weekHours - b.weekHours ||
+      b.preference - a.preference ||
+      a.worker.id.localeCompare(b.worker.id),
+    )
+    .map((item) => item.worker);
+}
+
+function assignLargeShortShift(shift: Shift, workers: Worker[], assignments: ScheduleAssignment[]) {
+  const managerTarget = shift.requiredSupervisors ?? (shift.requiresSupervisor ? 1 : 0);
+  while (getShiftAssignments(shift, assignments).length < shift.requiredWorkers) {
+    const current = getShiftAssignments(shift, assignments);
+    const supervisors = current.filter((assignment) => assignment.workerType === "supervisor").length;
+    const paid = current.filter((assignment) => isPaidWorker(assignment.workerType)).length;
+    const needsSupervisor = supervisors < managerTarget;
+    const needsPaid = paid < (shift.minPaidStaff ?? 0);
+    const paidCapReached = shift.maxPaidStaff !== undefined && paid >= shift.maxPaidStaff;
+    let pool = needsSupervisor
+      ? workers.filter((worker) => worker.workerType === "supervisor")
+      : needsPaid
+        ? workers.filter((worker) => isPaidWorker(worker.workerType))
+        : paidCapReached
+          ? workers.filter((worker) => !isPaidWorker(worker.workerType))
+          : workers.filter((worker) => worker.workerType !== "supervisor");
+    let selected = rankLargeShiftWorkers(shift, pool, assignments)[0];
+    let capOverride = false;
+    if (!selected && !needsSupervisor) {
+      pool = workers;
+      selected = rankLargeShiftWorkers(shift, pool, assignments)[0];
+      capOverride = paidCapReached;
+    }
+    if (!selected) break;
+    const candidate = fullShiftCandidate(selected, shift, assignments);
+    if (!candidate.evaluation.eligible) break;
+    commitCandidate(
+      candidate,
+      shift,
+      assignments,
+      needsSupervisor ? "Covers the required supervisor spot" : needsPaid ? "Fills the minimum paid staffing rule" : undefined,
+      capOverride ? ["Exceeds the paid staff cap to protect minimum coverage"] : [],
+    );
+  }
+}
+
 export function assignRequiredSupervisor(shift: Shift, workers: Worker[], assignments: ScheduleAssignment[]) {
   if (!shift.requiresSupervisor || getShiftAssignments(shift, assignments).some((assignment) => assignment.workerType === "supervisor")) return undefined;
   const candidate = workers
@@ -896,7 +1043,10 @@ export function getCoverageMetrics(shifts: Shift[], assignments: ScheduleAssignm
       const required = shift.requiredWorkerHours ?? shift.requiredWorkers * 8;
       const assigned = getShiftAssignments(shift, assignments);
       requiredWorkerHours += required;
-      coveredWorkerHours += required * Math.min(1, assigned.length / Math.max(shift.requiredWorkers, 1));
+      coveredWorkerHours += Math.min(
+        required,
+        assigned.reduce((sum, assignment) => sum + getAssignmentDurationHours(assignment), 0),
+      );
       continue;
     }
     for (const slot of buildSlots(shift)) {
@@ -988,6 +1138,8 @@ export function getCoverageRiskLevel(shift: Shift, assignments: ScheduleAssignme
     const managerTarget = shift.requiredSupervisors ?? (shift.requiresSupervisor ? 1 : 0);
     const managers = assigned.filter((item) => item.workerType === "supervisor").length;
     const paid = assigned.filter((item) => isPaidWorker(item.workerType)).length;
+    const requiredHours = shift.requiredWorkerHours ?? shift.requiredWorkers * 8;
+    const assignedHours = getDailyRosterHours(shift, assignments);
     const reasons: string[] = [];
     let level: CoverageRiskLevel = "low";
     if (assigned.length < shift.requiredWorkers) {
@@ -1001,6 +1153,10 @@ export function getCoverageRiskLevel(shift: Shift, assignments: ScheduleAssignme
     if (shift.minPaidStaff !== undefined && paid < shift.minPaidStaff) {
       level = "high";
       reasons.push(`Only ${paid} of ${shift.minPaidStaff} minimum paid staff assigned`);
+    }
+    if (assignedHours < requiredHours) {
+      level = shift.priority === "Urgent" || shift.priority === "High" ? "critical" : "high";
+      reasons.push(`${round(requiredHours - assignedHours)} required worker-hours remain unfilled`);
     }
     if (level === "low") reasons.push("Daily roster and manager requirements met");
     return { shift, level, reasons };
@@ -1102,7 +1258,23 @@ function canPreserveAssignmentRule(assignment: ScheduleAssignment, replacement: 
   return true;
 }
 
-export function repairUncoveredShifts(context: ScheduleContext) {
+function capRepairEndAtRecoveredCoverage(
+  shift: Shift,
+  startTime: string,
+  proposedEndTime: string,
+  assignments: ScheduleAssignment[],
+) {
+  const recovered = buildSlots(shift).find(
+    (slot) =>
+      slot.startTime > startTime &&
+      slot.startTime < proposedEndTime &&
+      getSlotAssignments(shift, slot.startTime, slot.endTime, assignments).length >= shift.requiredWorkers,
+  );
+  return recovered?.startTime ?? proposedEndTime;
+}
+
+export function repairUncoveredShifts(context: ScheduleContext, maximumRepairAttempts = Number.POSITIVE_INFINITY) {
+  let repairAttempts = 0;
   const ordered = [...context.shifts].sort(
     (a, b) => getShiftDifficultyScore(b, context.workers, context.assignments) - getShiftDifficultyScore(a, context.workers, context.assignments),
   );
@@ -1110,15 +1282,28 @@ export function repairUncoveredShifts(context: ScheduleContext) {
     if (sourceShift.staffingMode === "daily_roster") continue;
     for (const slot of buildSlots(sourceShift)) {
       while (getSlotAssignments(sourceShift, slot.startTime, slot.endTime, context.assignments).length < sourceShift.requiredWorkers) {
+        repairAttempts += 1;
+        if (repairAttempts > maximumRepairAttempts) return context;
         const segment = { ...sourceShift, startTime: slot.startTime, endTime: slot.endTime };
         const current = getSlotAssignments(sourceShift, slot.startTime, slot.endTime, context.assignments);
-        const directPool = sourceShift.requiresSupervisor && !current.some((item) => item.workerType === "supervisor")
+        const needsSupervisor = sourceShift.requiresSupervisor && !current.some((item) => item.workerType === "supervisor");
+        const directPool = needsSupervisor
           ? context.workers.filter((worker) => worker.workerType === "supervisor")
           : context.workers.filter((worker) => worker.workerType !== "supervisor");
         const direct = rankCandidates(segment, sourceShift, directPool, context.assignments, { hardToFill: true, allShifts: context.shifts })[0] ??
-          rankCandidates(segment, sourceShift, context.workers, context.assignments, { hardToFill: true, allShifts: context.shifts })[0];
+          (needsSupervisor ? undefined : rankCandidates(segment, sourceShift, context.workers, context.assignments, { hardToFill: true, allShifts: context.shifts })[0]);
         if (direct) {
-          commitCandidate(direct, sourceShift, context.assignments, "Added during the coverage repair pass");
+          const cappedEnd = capRepairEndAtRecoveredCoverage(
+            sourceShift,
+            direct.segment.startTime,
+            direct.segment.endTime,
+            context.assignments,
+          );
+          const capped = cappedEnd === direct.segment.endTime
+            ? direct
+            : exactCandidate(direct.worker, sourceShift, direct.segment.startTime, cappedEnd, context.assignments, { hardToFill: true, allShifts: context.shifts });
+          if (!capped) break;
+          commitCandidate(capped, sourceShift, context.assignments, "Added during the coverage repair pass");
           continue;
         }
 
@@ -1130,6 +1315,22 @@ export function repairUncoveredShifts(context: ScheduleContext) {
           const movable = context.assignments.filter((assignment) => assignment.workerId === blocker.id);
           for (const oldAssignment of movable) {
             const withoutOld = context.assignments.filter((assignment) => assignment !== oldAssignment);
+            if (oldAssignment.shiftId === sourceShift.id) {
+              if (assignmentStartTime(oldAssignment) <= slot.startTime) continue;
+              const extended = exactCandidate(
+                blocker,
+                sourceShift,
+                slot.startTime,
+                assignmentEndTime(oldAssignment),
+                withoutOld,
+                { hardToFill: true, allShifts: context.shifts },
+              );
+              if (!extended) continue;
+              context.assignments.splice(context.assignments.indexOf(oldAssignment), 1);
+              commitCandidate(extended, sourceShift, context.assignments, "Extended earlier during the coverage repair pass");
+              repaired = true;
+              break;
+            }
             const replacement = context.workers
               .filter((worker) => worker.id !== blocker.id && canPreserveAssignmentRule(oldAssignment, worker))
               .flatMap((worker) => {
@@ -1144,7 +1345,10 @@ export function repairUncoveredShifts(context: ScheduleContext) {
                 return candidate ? [candidate] : [];
               })
               .sort((a, b) => a.loadRatio - b.loadRatio || b.evaluation.score - a.evaluation.score)[0];
-            const movedEnd = chooseAssignmentEnd(blocker, sourceShift, slot.startTime, withoutOld);
+            const proposedMovedEnd = chooseAssignmentEnd(blocker, sourceShift, slot.startTime, withoutOld);
+            const movedEnd = proposedMovedEnd
+              ? capRepairEndAtRecoveredCoverage(sourceShift, slot.startTime, proposedMovedEnd, withoutOld)
+              : undefined;
             const moved = movedEnd
               ? exactCandidate(blocker, sourceShift, slot.startTime, movedEnd, withoutOld, { hardToFill: true, allShifts: context.shifts })
               : undefined;
@@ -1159,25 +1363,15 @@ export function repairUncoveredShifts(context: ScheduleContext) {
         }
         if (repaired) continue;
 
-        const emergencyPool = sourceShift.requiresSupervisor &&
-          !getSlotAssignments(sourceShift, slot.startTime, slot.endTime, context.assignments).some((item) => item.workerType === "supervisor")
-          ? context.workers.filter((worker) => worker.workerType === "supervisor")
-          : context.workers;
-        const emergency = rankCandidates(segment, sourceShift, emergencyPool, context.assignments, {
-          hardToFill: true,
-          allowRoleMismatch: true,
-          allShifts: context.shifts,
-        })[0];
-        if (!emergency) break;
-        commitCandidate(emergency, sourceShift, context.assignments, "Emergency fallback prevented an uncovered period");
+        break;
       }
     }
   }
   return context;
 }
 
-export function rebalanceOverloadedWorkers(context: ScheduleContext) {
-  for (let pass = 0; pass < context.assignments.length; pass += 1) {
+export function rebalanceOverloadedWorkers(context: ScheduleContext, maximumPasses = context.assignments.length) {
+  for (let pass = 0; pass < Math.min(context.assignments.length, maximumPasses); pass += 1) {
     const fairness = getFairnessStats(context.workers, context.assignments);
     const overloaded = fairness.workers.find(
       (stat) => stat.assignedHours > stat.desiredHoursPerWeek || stat.utilizationRate > 90,
@@ -1296,16 +1490,25 @@ function generateScheduleForPlan(
       assignDailyRosterShift(sourceShift, workers, assignments);
       continue;
     }
+    if (shifts.length > 100 && shiftDurationHours(sourceShift) <= 6) {
+      assignLargeShortShift(sourceShift, workers, assignments);
+      continue;
+    }
     for (const slot of buildSlots(sourceShift)) {
       const slotShift = { ...sourceShift, startTime: slot.startTime, endTime: slot.endTime };
       assignSupervisorAt(sourceShift, slotShift, workers, assignments);
+      if (sourceShift.requiresSupervisor && !getSlotAssignments(sourceShift, slot.startTime, slot.endTime, assignments).some((assignment) => assignment.workerType === "supervisor")) continue;
       assignPaidMinimumAt(sourceShift, slotShift, workers, assignments);
       fillCoverageAt(sourceShift, slotShift, workers, assignments);
     }
   }
 
-  const context = repairUncoveredShifts({ workers, shifts, assignments });
-  rebalanceOverloadedWorkers(context);
+  const largeSchedule = shifts.length > 100;
+  const context = repairUncoveredShifts(
+    { workers, shifts, assignments },
+    largeSchedule ? 0 : Number.POSITIVE_INFINITY,
+  );
+  rebalanceOverloadedWorkers(context, largeSchedule ? 0 : context.assignments.length);
 
   context.assignments.sort(
     (a, b) =>
@@ -1393,10 +1596,41 @@ function compareScheduleQuality(a: ScheduleQuality, b: ScheduleQuality) {
   );
 }
 
+function duplicateIds<T extends { id: string }>(items: T[]) {
+  const seen = new Set<string>();
+  return [...new Set(items.flatMap((item) => seen.has(item.id) ? [item.id] : (seen.add(item.id), [])))];
+}
+
+function invalidInputResult(workers: Worker[], shifts: Shift[], messages: string[]): OptimizedScheduleResult {
+  const context: ScheduleContext = { workers, shifts, assignments: [] };
+  const coverageGaps = getUncoveredShifts(shifts, []);
+  return {
+    assignments: [],
+    uncoveredShifts: coverageGaps.filter((gap) => gap.status === "uncovered"),
+    partiallyCoveredShifts: coverageGaps.filter((gap) => gap.status === "partial"),
+    fairnessStats: getFairnessStats(workers, []),
+    laborCostStats: getLaborCostStats(shifts, []),
+    shiftRisks: shifts.map((shift) => getCoverageRiskLevel(shift, [])),
+    shiftResults: buildShiftResults(context),
+    validation: {
+      valid: false,
+      issues: messages.map((message) => ({ rule: "input", message })),
+    },
+  };
+}
+
 export function generateOptimizedSchedule(input: ScheduleInput): OptimizedScheduleResult;
 export function generateOptimizedSchedule(workers: Worker[], shifts: Shift[]): OptimizedScheduleResult;
 export function generateOptimizedSchedule(inputOrWorkers: ScheduleInput | Worker[], inputShifts: Shift[] = []): OptimizedScheduleResult {
   const { workers, shifts, assignments } = normalizeScheduleInput(inputOrWorkers, inputShifts);
+  const duplicateWorkerIds = duplicateIds(workers);
+  const duplicateShiftIds = duplicateIds(shifts);
+  if (duplicateWorkerIds.length || duplicateShiftIds.length) {
+    return invalidInputResult(workers, shifts, [
+      ...duplicateWorkerIds.map((id) => `Duplicate worker ID: ${id}`),
+      ...duplicateShiftIds.map((id) => `Duplicate shift ID: ${id}`),
+    ]);
+  }
   const ranked = buildSchedulingPlans(shifts)
     .map((plan) => generateScheduleForPlan(workers, shifts, plan, assignments))
     .map((result) => ({ result, quality: getScheduleQuality(result, workers, shifts) }))

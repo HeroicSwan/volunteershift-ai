@@ -49,19 +49,32 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }
 
   function generateTestStaff() {
+    const sampleData = createSampleData();
+    const sampleShiftTitles = new Set(sampleData.shifts.map((shift) => shift.title));
+    const hasDemoNonprofitShifts = sampleData.shifts.some((sampleShift) =>
+      data.shifts.some((shift) => shift.title === sampleShift.title),
+    );
     const existingByEmail = new Map(data.workers.map((worker) => [worker.email.toLowerCase(), worker]));
-    const generated = createTestStaff().map((worker) => ({
+    const generated = [
+      ...(hasDemoNonprofitShifts ? sampleData.workers : []),
+      ...createTestStaff(),
+    ].map((worker) => ({
       ...worker,
       id: existingByEmail.get(worker.email.toLowerCase())?.id ?? crypto.randomUUID(),
     }));
     const generatedEmails = new Set(generated.map((worker) => worker.email.toLowerCase()));
     const isTestCompanyWorker = (email: string) => email.toLowerCase().startsWith("test.");
     const existingShiftByKey = new Map(data.shifts.map((shift) => [`${shift.title}|${shift.date}`, shift]));
-    const generatedShifts = createTestStaffShifts().map((shift) => {
+    const existingShiftByTitle = new Map(data.shifts.map((shift) => [shift.title, shift]));
+    const generatedShifts = [
+      ...(hasDemoNonprofitShifts ? sampleData.shifts : []),
+      ...createTestStaffShifts(),
+    ].map((shift) => {
       const key = `${shift.title}|${shift.date}`;
-      return { ...shift, id: existingShiftByKey.get(key)?.id ?? crypto.randomUUID() };
+      return { ...shift, id: existingShiftByKey.get(key)?.id ?? existingShiftByTitle.get(shift.title)?.id ?? crypto.randomUUID() };
     });
     const generatedShiftKeys = new Set(generatedShifts.map((shift) => `${shift.title}|${shift.date}`));
+    const generatedShiftTitles = new Set(generatedShifts.map((shift) => shift.title));
 
     saveData({
       ...data,
@@ -70,7 +83,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         ...generated,
       ],
       shifts: [
-        ...data.shifts.filter((shift) => !generatedShiftKeys.has(`${shift.title}|${shift.date}`)),
+        ...data.shifts.filter(
+          (shift) =>
+            !generatedShiftKeys.has(`${shift.title}|${shift.date}`) &&
+            !generatedShiftTitles.has(shift.title) &&
+            !(hasDemoNonprofitShifts && sampleShiftTitles.has(shift.title)),
+        ),
         ...generatedShifts,
       ],
       assignments: [],
