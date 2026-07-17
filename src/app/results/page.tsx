@@ -71,7 +71,15 @@ function formatCurrency(value: number) {
 }
 
 export default function ResultsPage() {
-  const { assignments, shifts, workers, scheduleGeneratedAt, hydrated } = useVolunteerMatcherData();
+  const {
+    assignments,
+    shifts,
+    workers,
+    scheduleGeneratedAt,
+    scheduleGenerationSource,
+    scheduleGenerationWarning,
+    hydrated,
+  } = useVolunteerMatcherData();
 
   if (!hydrated) {
     return <PageLoading label="Loading schedule results" />;
@@ -178,7 +186,7 @@ export default function ResultsPage() {
     <div className="space-y-7 sm:space-y-8">
       <PageHeader
         title="Schedule Results"
-        description={`Generated ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(scheduleGeneratedAt))}. Review every assignment before sharing the schedule.`}
+        description={`Generated ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(scheduleGeneratedAt))} by ${scheduleGenerationSource === "openai" ? "the AI planner" : "the deterministic safety fallback"}. Review every assignment before sharing the schedule.`}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -194,6 +202,13 @@ export default function ResultsPage() {
           </div>
         }
       />
+
+      {scheduleGenerationWarning && (
+        <Card className="border-ochre/40 bg-ochre/10 p-4 text-sm text-ink">
+          <p className="font-semibold">Generation fallback used</p>
+          <p className="mt-1 text-ink-soft">{scheduleGenerationWarning}</p>
+        </Card>
+      )}
 
       <Card className="overflow-hidden p-5 sm:p-7">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">

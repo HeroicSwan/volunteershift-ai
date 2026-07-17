@@ -11,11 +11,11 @@ import {
 } from "@/lib/storage";
 import type {
   ImportMode,
-  OptimizedScheduleResult,
   ShiftInput,
   VolunteerMatcherData,
   WorkerInput,
 } from "@/types";
+import type { AiScheduleGeneration } from "@/lib/ai-scheduler";
 
 type DataContextValue = VolunteerMatcherData & {
   hydrated: boolean;
@@ -29,7 +29,7 @@ type DataContextValue = VolunteerMatcherData & {
   deleteShift: (id: string) => void;
   importWorkers: (workers: WorkerInput[], mode: ImportMode) => void;
   importShifts: (shifts: ShiftInput[], mode: ImportMode) => void;
-  generateSchedule: () => OptimizedScheduleResult;
+  generateSchedule: () => Promise<AiScheduleGeneration>;
 };
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -179,14 +179,31 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
-  function generateSchedule() {
-    const result = generateOptimizedSchedule(data.workers, data.shifts);
+  async function generateSchedule() {
+    let generated: AiScheduleGeneration;
+    try {
+      const response = await fetch("/api/generate-schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workers: data.workers, shifts: data.shifts }),
+      });
+      if (!response.ok) throw new Error("Schedule API request failed");
+      generated = (await response.json()) as AiScheduleGeneration;
+    } catch {
+      generated = {
+        result: generateOptimizedSchedule(data.workers, data.shifts),
+        source: "deterministic",
+        warning: "The AI scheduling service could not be reached, so the deterministic safety scheduler was used.",
+      };
+    }
     saveData({
       ...data,
-      assignments: result.assignments,
+      assignments: generated.result.assignments,
       scheduleGeneratedAt: new Date().toISOString(),
+      scheduleGenerationSource: generated.source,
+      scheduleGenerationWarning: generated.warning,
     });
-    return result;
+    return generated;
   }
 
   return (

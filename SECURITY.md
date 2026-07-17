@@ -4,7 +4,7 @@
 
 Please report suspected vulnerabilities through a private GitHub security advisory for this repository. Do not include API keys, private organizational data, or exploit details in a public issue.
 
-VolunteerShift AI stores scheduling data in the user's local browser or desktop-app storage. The optional AI summary sends only the schedule context requested by the user to the configured OpenAI-compatible endpoint. The deterministic scheduler itself does not call an AI service.
+VolunteerShift AI stores scheduling data in the user's local browser or desktop-app storage. The AI schedule planner and optional summary send roster or schedule context to the configured OpenAI-compatible endpoint only when an API key is configured. The deterministic safety engine does not call an AI service and remains the fallback when the API is unavailable.
 
 ## Current dependency audit
 
