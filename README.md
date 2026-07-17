@@ -14,6 +14,8 @@ Build a fair, fully-covered, cost-aware weekly schedule in a few clicks — with
 > 🚧 **Work in progress** — this project is under active development and will keep changing.
 > It's **free to use, fork, and modify** for any purpose. See [License](#license).
 
+> ⚠️ **Early-access warning:** the app is usable for experimentation and small internal pilots, but it has not been tested enough to recommend for production staffing decisions. Use it at your own risk, verify every generated schedule manually, and keep a separate backup of your roster and shifts. Never rely on it as the only source of truth for payroll, safety, compliance, or emergency coverage.
+
 ---
 
 ## ⬇️ Download & install
@@ -103,27 +105,46 @@ Bring your existing data in and take schedules out:
 - [Radix UI](https://www.radix-ui.com/) primitives, [lucide-react](https://lucide.dev/) icons
 - [Vitest](https://vitest.dev/) for the scheduler, CSV, and AI-summary test suites
 
-## Getting started
+## Getting started from a clean PC
 
-**Requirements:** Node.js 20+
+This is the complete setup for a computer with no project tools installed. It requires Node.js 20 or newer and Git.
+
+1. Install [Node.js 20 LTS or newer](https://nodejs.org/). Close and reopen your terminal after installation.
+2. Install [Git](https://git-scm.com/downloads) if it is not already installed.
+3. Clone this repository and enter the project folder:
 
 ```bash
-# install dependencies
-npm install
+git clone https://github.com/HeroicSwan/volunteershift-ai.git
+cd volunteershift-ai
+```
 
-# run the dev server
+4. Install the exact locked dependencies and start the development server:
+
+```bash
+npm ci
+
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), click **Load demo nonprofit** to populate a sample team and week, then **Generate schedule**.
+5. Open [http://localhost:3000](http://localhost:3000), click **Load demo nonprofit** to populate sample data, review Staff and Shifts, then click **Generate schedule**. Treat the output as a draft and manually verify coverage, roles, hours, and conflicts.
+
+If port 3000 is already in use, start on another port with `npm run dev -- -p 3020` and open [http://localhost:3020](http://localhost:3020).
+
+The app stores data in browser or desktop localStorage. Export your data before experimenting, clearing site data, switching browsers, or reinstalling the desktop app.
+
+### Run, test, and build
 
 ```bash
-npm run build   # production build
-npm run start   # serve the production build
-npm test        # run the test suite
-npm run lint    # lint
-npm run typecheck # strict TypeScript check
+npm run dev              # development server
+npm run typecheck        # strict TypeScript check
+npm run lint             # lint
+npm test                 # unit and regression tests
+npm run eval             # 29 deterministic scheduler evaluations
+npm run build            # production build
+npm run start            # serve the production build
 ```
+
+The adversarial suite is available with `npm run eval:adversarial`, but it currently exposes two documented large-scale timeout profiles and is not the normal release gate. Passing automated checks does not mean the scheduler is safe for your organization; review every result yourself.
 
 ## Reliability and evaluations
 
