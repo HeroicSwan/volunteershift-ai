@@ -13,7 +13,7 @@ import {
   getLaborCostStats,
   getUncoveredShifts,
 } from "./scheduler";
-import { createSampleData } from "./sample-data";
+import { createSampleData, createTestStaff, createTestStaffShifts } from "./sample-data";
 import { DAYS, type ScheduleAssignment, type Shift, type Worker } from "../types";
 
 function makeWorker(overrides: Partial<Worker> = {}): Worker {
@@ -406,6 +406,17 @@ describe("full coverage on the demo nonprofit roster", () => {
 
     expect(result.uncoveredShifts).toEqual([]);
     expect(result.partiallyCoveredShifts).toEqual([]);
+    expect(getCoverageMetrics(shifts, result.assignments).coverageRate).toBe(100);
+    expect(result.validation.valid).toBe(true);
+  });
+
+  it("covers the combined nonprofit and daily-operations demo without high-risk gaps", () => {
+    const sample = createSampleData();
+    const workers = [...sample.workers, ...createTestStaff()];
+    const shifts = [...sample.shifts, ...createTestStaffShifts()];
+    const result = generateOptimizedSchedule(workers, shifts);
+
+    expect(result.shiftRisks.filter((risk) => risk.level === "high")).toEqual([]);
     expect(getCoverageMetrics(shifts, result.assignments).coverageRate).toBe(100);
     expect(result.validation.valid).toBe(true);
   });

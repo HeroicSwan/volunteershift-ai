@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarDays,
+  FlaskConical,
   HandHeart,
   LayoutDashboard,
   Sparkles,
@@ -19,6 +20,9 @@ const navigation = [
   { href: "/shifts", label: "Shifts", icon: CalendarDays },
   { href: "/generate", label: "Generate", icon: Sparkles },
   { href: "/results", label: "Results", icon: HandHeart },
+  ...(process.env.NODE_ENV === "development"
+    ? [{ href: "/admin/evaluations", label: "Evals", icon: FlaskConical }]
+    : []),
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -106,7 +110,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </main>
 
       <nav
-        className="fixed inset-x-3 bottom-3 z-30 grid grid-cols-5 rounded-3xl border border-moss/15 bg-sand/95 p-1.5 shadow-[0_16px_40px_rgba(96,108,56,0.18)] backdrop-blur-xl lg:hidden"
+        className={cn(
+          "fixed inset-x-3 bottom-3 z-30 grid rounded-3xl border border-moss/15 bg-sand/95 p-1.5 shadow-[0_16px_40px_rgba(96,108,56,0.18)] backdrop-blur-xl lg:hidden",
+          navigation.length === 6 ? "grid-cols-6" : "grid-cols-5",
+        )}
         aria-label="Mobile navigation"
       >
         {navigation.map(({ href, label, icon: Icon }) => {

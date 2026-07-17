@@ -75,17 +75,24 @@ export default function DashboardPage() {
     .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
   const uniqueRoles = [...new Set(shifts.map((shift) => shift.requiredRole))].sort();
   const demandByDay = DAYS.map((day) => {
-    const total = shifts
-      .filter(
-        (shift) =>
-          new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(
-            new Date(`${shift.date}T12:00:00`),
-          ) === day,
-      )
-      .reduce((sum, shift) => sum + shift.requiredWorkers, 0);
-    return { day, total };
+    const dayShifts = shifts.filter(
+      (shift) =>
+        new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(
+          new Date(`${shift.date}T12:00:00`),
+        ) === day,
+    );
+    const required = dayShifts.reduce((sum, shift) => sum + shift.requiredWorkers, 0);
+    const filled = hasSchedule
+      ? dayShifts.reduce(
+          (sum, shift) => sum + Math.min(getShiftMinimumCoverage(shift, assignments), shift.requiredWorkers),
+          0,
+        )
+      : 0;
+    return { day, required, filled };
   });
-  const maxDemand = Math.max(...demandByDay.map(({ total }) => total), 1);
+  const maxDemand = Math.max(...demandByDay.map(({ required }) => required), 1);
+  const requiredPositions = demandByDay.reduce((sum, day) => sum + day.required, 0);
+  const filledPositions = demandByDay.reduce((sum, day) => sum + day.filled, 0);
   const stats = [
     {
       label: "Total volunteers",
@@ -93,7 +100,7 @@ export default function DashboardPage() {
       note: workers.length === volunteerCount ? "community team members" : `${workers.length - volunteerCount} paid staff or leads`,
       icon: HandHeart,
     },
-    { label: "Total shifts", value: shifts.length, note: `${coverage.requiredWorkerHours} worker-hours needed`, icon: CalendarDays },
+    { label: "Total shifts", value: shifts.length, note: `${coverage.requiredWorkerHours} worker-hours required`, icon: CalendarDays },
     {
       label: "Coverage",
       value: hasSchedule ? `${coveragePercentage}%` : "—",
@@ -163,8 +170,10 @@ export default function DashboardPage() {
                 <dd className="text-2xl font-semibold">{workers.length}</dd>
               </div>
               <div className="flex items-end justify-between gap-4 border-b border-sand/15 pb-4">
-                <dt className="text-sm text-sand/80">Worker-hours needed</dt>
-                <dd className="text-2xl font-semibold">{coverage.requiredWorkerHours}</dd>
+                <dt className="text-sm text-sand/80">{hasSchedule ? "Worker-hours covered" : "Worker-hours required"}</dt>
+                <dd className="text-2xl font-semibold">
+                  {hasSchedule ? `${coverage.coveredWorkerHours}/${coverage.requiredWorkerHours}` : coverage.requiredWorkerHours}
+                </dd>
               </div>
               <div className="flex items-end justify-between gap-4">
                 <dt className="text-sm text-sand/80">Schedule status</dt>
@@ -219,21 +228,29 @@ export default function DashboardPage() {
           <Card className="overflow-hidden p-5 sm:p-7">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold tracking-[-0.025em]">Weekly staffing demand</h2>
-                <p className="mt-1 text-sm text-ink-soft">Worker spots needed by day.</p>
+                <h2 className="text-lg font-semibold tracking-[-0.025em]">{hasSchedule ? "Weekly staffing coverage" : "Weekly staffing demand"}</h2>
+                <p className="mt-1 text-sm text-ink-soft">
+                  {hasSchedule ? "Minimum positions filled by day." : "Required worker positions by day."}
+                </p>
               </div>
-              <Badge tone="moss">{shifts.reduce((sum, shift) => sum + shift.requiredWorkers, 0)} spots</Badge>
+              <Badge tone={hasSchedule && filledPositions < requiredPositions ? "oat" : "moss"}>
+                {hasSchedule ? `${filledPositions}/${requiredPositions} filled` : `${requiredPositions} positions`}
+              </Badge>
             </div>
-            <div className="mt-8 flex h-48 items-end gap-2 sm:gap-4" aria-label="Worker spots needed by day">
-              {demandByDay.map(({ day, total }, index) => (
+            <div className="mt-8 flex h-48 items-end gap-2 sm:gap-4" aria-label={hasSchedule ? "Worker positions filled by day" : "Worker positions required by day"}>
+              {demandByDay.map(({ day, required, filled }, index) => (
                 <div key={day} className="flex h-full min-w-0 flex-1 flex-col justify-end text-center">
-                  <span className="mb-2 text-xs font-semibold text-ink">{total || "—"}</span>
+                  <span className="mb-2 text-xs font-semibold text-ink">
+                    {required ? (hasSchedule ? `${filled}/${required}` : required) : "—"}
+                  </span>
                   <div className="flex h-32 items-end rounded-2xl bg-sage/15 p-1.5">
                     <div
                       className="graph-reveal-y w-full rounded-xl bg-moss"
                       style={{
-                        height: total ? `${Math.max((total / maxDemand) * 100, 18)}%` : "8%",
-                        opacity: total ? 1 : 0.2,
+                        height: required
+                          ? `${Math.max((hasSchedule ? filled / required : required / maxDemand) * 100, 18)}%`
+                          : "8%",
+                        opacity: required ? 1 : 0.2,
                         animationDelay: `${index * 45}ms`,
                       }}
                     />

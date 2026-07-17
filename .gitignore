@@ -13,6 +13,11 @@
 # testing
 /coverage
 
+# generated scheduler evaluation output
+/evals/reports/*.json
+/evals/reports/latest.*
+/evals/reports/adversarial-latest.*
+
 # next.js
 /.next/
 /out/

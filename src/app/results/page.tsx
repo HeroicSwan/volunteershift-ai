@@ -216,7 +216,11 @@ export default function ResultsPage() {
         </div>
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-ink-soft">
           <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-moss" /> Covered worker-hours</span>
-          <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-terracotta" /> Coverage still needed</span>
+          {coverageRate < 100 ? (
+            <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-terracotta" /> Coverage still needed</span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-moss"><CheckCircle2 size={13} /> All staffing requirements filled</span>
+          )}
         </div>
 
         <div className="mt-7 grid grid-cols-2 gap-3 xl:grid-cols-4">
