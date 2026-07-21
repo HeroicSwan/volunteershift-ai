@@ -3,6 +3,7 @@
 import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
 import { createSampleData, createTestStaff, createTestStaffShifts } from "@/lib/sample-data";
 import { generateOptimizedSchedule } from "@/lib/scheduler";
+import { buildScheduleFromAiProposals } from "@/lib/ai-schedule-proposals";
 import {
   getDataSnapshot,
   getServerDataSnapshot,
@@ -182,13 +183,25 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   async function generateSchedule() {
     let generated: AiScheduleGeneration;
     try {
-      const response = await fetch("/api/generate-schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workers: data.workers, shifts: data.shifts }),
-      });
-      if (!response.ok) throw new Error("Schedule API request failed");
-      generated = (await response.json()) as AiScheduleGeneration;
+      const desktopBridge = typeof window !== "undefined" ? window.volunteerShiftDesktop : undefined;
+      if (desktopBridge) {
+        const proposalResponse = await desktopBridge.generateSchedule({ workers: data.workers, shifts: data.shifts });
+        generated = {
+          result: proposalResponse.source === "openai"
+            ? buildScheduleFromAiProposals(proposalResponse.assignments, data.workers, data.shifts)
+            : generateOptimizedSchedule(data.workers, data.shifts),
+          source: proposalResponse.source,
+          warning: proposalResponse.warning,
+        };
+      } else {
+        const response = await fetch("/api/generate-schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workers: data.workers, shifts: data.shifts }),
+        });
+        if (!response.ok) throw new Error("Schedule API request failed");
+        generated = (await response.json()) as AiScheduleGeneration;
+      }
     } catch {
       generated = {
         result: generateOptimizedSchedule(data.workers, data.shifts),

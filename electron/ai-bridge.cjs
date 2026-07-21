@@ -1,22 +1,6 @@
-import OpenAI from "openai";
-import {
-  generateOptimizedSchedule,
-} from "./scheduler";
-import { aiProposalSchema, buildScheduleFromAiProposals } from "./ai-schedule-proposals";
-import type {
-  OptimizedScheduleResult,
-  ScheduleGenerationSource,
-  Shift,
-  Worker,
-} from "../types";
+const MODEL_TIMEOUT_MS = 20_000;
 
-export type AiScheduleGeneration = {
-  result: OptimizedScheduleResult;
-  source: ScheduleGenerationSource;
-  warning?: string;
-};
-
-function buildPromptContext(workers: Worker[], shifts: Shift[]) {
+function buildPromptContext(workers, shifts) {
   return {
     workers: workers.map((worker) => ({
       id: worker.id,
@@ -55,18 +39,32 @@ function buildPromptContext(workers: Worker[], shifts: Shift[]) {
   };
 }
 
-export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Promise<AiScheduleGeneration> {
-  const deterministic = () => generateOptimizedSchedule(workers, shifts);
+function isProposal(value, workerIds, shiftIds) {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof value.workerId === "string" &&
+    workerIds.has(value.workerId) &&
+    typeof value.shiftId === "string" &&
+    shiftIds.has(value.shiftId) &&
+    typeof value.startTime === "string" &&
+    typeof value.endTime === "string" &&
+    (value.reason === undefined || typeof value.reason === "string"),
+  );
+}
+
+async function requestProposals(workers, shifts) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return {
-      result: deterministic(),
       source: "deterministic",
-      warning: "No AI API key is configured, so the deterministic safety scheduler was used.",
+      assignments: [],
+      warning: "No AI API key is configured for the desktop app, so the deterministic safety scheduler was used.",
     };
   }
 
   try {
+    const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,
       baseURL: process.env.OPENAI_BASE_URL || undefined,
@@ -84,18 +82,25 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
           { role: "user", content: JSON.stringify(buildPromptContext(workers, shifts)) },
         ],
       },
-      { signal: AbortSignal.timeout(20_000) },
+      { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) },
     );
     const content = completion.choices[0]?.message.content;
     if (!content) throw new Error("The scheduling model returned no content.");
-    const parsed = aiProposalSchema.parse(JSON.parse(content));
-    const result = buildScheduleFromAiProposals(parsed.assignments, workers, shifts);
-    return { result, source: "openai" };
+    const parsed = JSON.parse(content);
+    const workerIds = new Set(workers.map((worker) => worker.id));
+    const shiftIds = new Set(shifts.map((shift) => shift.id));
+    if (!Array.isArray(parsed.assignments)) throw new Error("The scheduling model returned no assignments.");
+    return {
+      source: "openai",
+      assignments: parsed.assignments.filter((value) => isProposal(value, workerIds, shiftIds)).slice(0, 10_000),
+    };
   } catch {
     return {
-      result: deterministic(),
       source: "deterministic",
-      warning: "The AI scheduling service was unavailable or returned an unsafe plan, so the deterministic safety scheduler was used.",
+      assignments: [],
+      warning: "The desktop AI service was unavailable or returned an unsafe plan, so the deterministic safety scheduler was used.",
     };
   }
 }
+
+module.exports = { requestProposals };

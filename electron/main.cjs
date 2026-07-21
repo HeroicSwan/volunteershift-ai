@@ -1,6 +1,7 @@
-const { app, BrowserWindow, protocol, net, shell, Menu } = require("electron");
+const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { requestProposals } = require("./ai-bridge.cjs");
 
 // Directory holding the static Next.js export (created by `npm run build:desktop`).
 const OUT_DIR = path.join(__dirname, "..", "out");
@@ -54,7 +55,20 @@ function createWindow() {
   win.loadURL(DEV_URL || "app://local/");
 }
 
+function isTrustedRenderer(event) {
+  const url = event.senderFrame?.url || "";
+  return url.startsWith("app://local/") || Boolean(DEV_URL && url.startsWith(DEV_URL));
+}
+
 app.whenReady().then(() => {
+  ipcMain.handle("generate-schedule", async (event, payload) => {
+    if (!isTrustedRenderer(event)) throw new Error("Untrusted renderer");
+    if (!payload || !Array.isArray(payload.workers) || !Array.isArray(payload.shifts)) {
+      throw new Error("Workers and shifts are required");
+    }
+    return requestProposals(payload.workers, payload.shifts);
+  });
+
   if (!DEV_URL) {
     // Serve the static export. Absolute asset paths like /_next/... resolve
     // under app://local, and trailing-slash routes map to their index.html.

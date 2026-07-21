@@ -6,14 +6,15 @@ directories:
   output: dist
   buildResources: build
 
-# Only ship the Electron entry + the static export. None of the web app's
-# node_modules (next, react, openai…) are needed at runtime, so exclude them
-# — the desktop app is just the static `out/` served over a custom protocol.
+# Only ship the Electron entry + the static export. The web app's Next/React
+# modules are not needed at runtime, but the main-process AI bridge needs the
+# OpenAI client while the renderer stays dependency-free.
 files:
   - electron/**/*
   - out/**/*
   - package.json
   - "!node_modules/**/*"
+  - node_modules/openai/**/*
 
 extraMetadata:
   main: electron/main.cjs

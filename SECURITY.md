@@ -6,6 +6,8 @@ Please report suspected vulnerabilities through a private GitHub security adviso
 
 VolunteerShift AI stores scheduling data in the user's local browser or desktop-app storage. The AI schedule planner and optional summary send roster or schedule context to the configured OpenAI-compatible endpoint only when an API key is configured. The deterministic safety engine does not call an AI service and remains the fallback when the API is unavailable.
 
+The desktop build keeps the AI client and API key in Electron's main process. The renderer receives only schedule proposal data through a narrow, origin-checked IPC handler; Node integration remains disabled and context isolation remains enabled. Packaged builds do not embed credentials.
+
 ## Current dependency audit
 
 `npm audit --omit=dev` currently reports two moderate findings for [GHSA-qx2v-qp2m-jg93](https://github.com/advisories/GHSA-qx2v-qp2m-jg93). The dependency path is Next.js 16.2.10 to its pinned PostCSS 8.4.31 package.
