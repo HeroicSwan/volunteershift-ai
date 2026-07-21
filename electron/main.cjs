@@ -1,4 +1,5 @@
-const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain } = require("electron");
+const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain, safeStorage } = require("electron");
+const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { requestProposals } = require("./ai-bridge.cjs");
@@ -10,6 +11,7 @@ const OUT_DIR = path.join(__dirname, "..", "out");
 const DEV_URL = process.env.ELECTRON_START_URL;
 // Brand oat/sand background so there's no white flash before the app paints.
 const BRAND_BACKGROUND = "#d4b895";
+const AI_CREDENTIALS_FILE = "ai-credentials.json";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -60,13 +62,77 @@ function isTrustedRenderer(event) {
   return url.startsWith("app://local/") || Boolean(DEV_URL && url.startsWith(DEV_URL));
 }
 
+function credentialsPath() {
+  return path.join(app.getPath("userData"), AI_CREDENTIALS_FILE);
+}
+
+function readStoredAiCredentials() {
+  if (!safeStorage.isEncryptionAvailable()) return undefined;
+  try {
+    const stored = JSON.parse(fs.readFileSync(credentialsPath(), "utf8"));
+    if (typeof stored.encryptedApiKey !== "string") return undefined;
+    return {
+      apiKey: safeStorage.decryptString(Buffer.from(stored.encryptedApiKey, "base64")),
+      baseUrl: typeof stored.baseUrl === "string" ? stored.baseUrl : undefined,
+      model: typeof stored.model === "string" ? stored.model : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function aiConfigStatus() {
+  const stored = readStoredAiCredentials();
+  return {
+    configured: Boolean(stored?.apiKey || process.env.OPENAI_API_KEY),
+    secureStorageAvailable: safeStorage.isEncryptionAvailable(),
+    baseUrl: stored?.baseUrl || process.env.OPENAI_BASE_URL || "",
+    model: stored?.model || process.env.OPENAI_MODEL || "gpt-5.4-mini",
+  };
+}
+
+function saveAiCredentials(payload) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("OS secure storage is unavailable on this device.");
+  const apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
+  if (apiKey.length < 10 || apiKey.length > 500) throw new Error("Enter a valid API key.");
+  const baseUrl = typeof payload?.baseUrl === "string" ? payload.baseUrl.trim().slice(0, 500) : "";
+  const model = typeof payload?.model === "string" ? payload.model.trim().slice(0, 120) : "";
+  fs.mkdirSync(app.getPath("userData"), { recursive: true });
+  fs.writeFileSync(credentialsPath(), JSON.stringify({
+    encryptedApiKey: safeStorage.encryptString(apiKey).toString("base64"),
+    baseUrl,
+    model,
+  }), { encoding: "utf8", mode: 0o600 });
+  return aiConfigStatus();
+}
+
+function clearAiCredentials() {
+  try { fs.unlinkSync(credentialsPath()); } catch {}
+  return aiConfigStatus();
+}
+
 app.whenReady().then(() => {
   ipcMain.handle("generate-schedule", async (event, payload) => {
     if (!isTrustedRenderer(event)) throw new Error("Untrusted renderer");
     if (!payload || !Array.isArray(payload.workers) || !Array.isArray(payload.shifts)) {
       throw new Error("Workers and shifts are required");
     }
-    return requestProposals(payload.workers, payload.shifts);
+    return requestProposals(payload.workers, payload.shifts, readStoredAiCredentials() || {});
+  });
+
+  ipcMain.handle("get-ai-config", (event) => {
+    if (!isTrustedRenderer(event)) throw new Error("Untrusted renderer");
+    return aiConfigStatus();
+  });
+
+  ipcMain.handle("save-ai-config", (event, payload) => {
+    if (!isTrustedRenderer(event)) throw new Error("Untrusted renderer");
+    return saveAiCredentials(payload);
+  });
+
+  ipcMain.handle("clear-ai-config", (event) => {
+    if (!isTrustedRenderer(event)) throw new Error("Untrusted renderer");
+    return clearAiCredentials();
   });
 
   if (!DEV_URL) {

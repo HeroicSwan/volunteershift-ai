@@ -190,7 +190,7 @@ npm run dev                                                    # terminal 1
 set ELECTRON_START_URL=http://localhost:3000 && npm run desktop  # terminal 2 (Windows)
 ```
 
-In the packaged desktop app, AI requests go through the Electron main-process IPC bridge. The renderer never receives the API key. For a local desktop run, provide the key to the process before launching (`$env:OPENAI_API_KEY="..."; npm run desktop` in PowerShell). Packaged builds never embed a key; without one, the app uses the deterministic safety fallback. A future settings screen should store desktop credentials in the operating system keychain before distributing the installer broadly.
+In the packaged desktop app, AI requests go through the Electron main-process IPC bridge. The renderer never receives the API key. For a local desktop run, provide the key to the process before launching (`$env:OPENAI_API_KEY="..."; npm run desktop` in PowerShell), or open Settings in the installed app to encrypt it with Electron's OS-backed `safeStorage`. Packaged builds never embed a key; without one, the app uses the deterministic safety fallback.
 
 ## Project structure
 

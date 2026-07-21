@@ -53,8 +53,8 @@ function isProposal(value, workerIds, shiftIds) {
   );
 }
 
-async function requestProposals(workers, shifts) {
-  const apiKey = process.env.OPENAI_API_KEY;
+async function requestProposals(workers, shifts, config = {}) {
+  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return {
       source: "deterministic",
@@ -67,11 +67,11 @@ async function requestProposals(workers, shifts) {
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,
-      baseURL: process.env.OPENAI_BASE_URL || undefined,
+      baseURL: config.baseUrl || process.env.OPENAI_BASE_URL || undefined,
     });
     const completion = await client.chat.completions.create(
       {
-        model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
+        model: config.model || process.env.OPENAI_MODEL || "gpt-5.4-mini",
         response_format: { type: "json_object" },
         messages: [
           {
