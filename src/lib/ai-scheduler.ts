@@ -20,7 +20,6 @@ function buildPromptContext(workers: Worker[], shifts: Shift[]) {
   return {
     workers: workers.map((worker) => ({
       id: worker.id,
-      name: worker.name,
       workerType: worker.workerType,
       employmentType: worker.employmentType,
       roles: worker.roles,
@@ -31,15 +30,12 @@ function buildPromptContext(workers: Worker[], shifts: Shift[]) {
       maxHoursPerWeek: worker.maxHoursPerWeek,
       maxShiftsPerWeek: worker.maxShiftsPerWeek,
       reliabilityScore: worker.reliabilityScore,
-      notes: worker.notes,
     })),
     shifts: shifts.map((shift) => ({
       id: shift.id,
-      title: shift.title,
       date: shift.date,
       startTime: shift.startTime,
       endTime: shift.endTime,
-      location: shift.location,
       requiredRole: shift.requiredRole,
       requiredWorkers: shift.requiredWorkers,
       requiresSupervisor: shift.requiresSupervisor,
@@ -50,7 +46,6 @@ function buildPromptContext(workers: Worker[], shifts: Shift[]) {
       minPaidStaff: shift.minPaidStaff,
       maxPaidStaff: shift.maxPaidStaff,
       priority: shift.priority,
-      notes: shift.notes,
     })),
   };
 }
@@ -67,30 +62,40 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
   }
 
   try {
+    const baseUrl = process.env.OPENAI_BASE_URL || "";
+    const isLocalProvider = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl);
     const client = new OpenAI({
       apiKey,
-      baseURL: process.env.OPENAI_BASE_URL || undefined,
+      baseURL: baseUrl || undefined,
     });
     const completion = await client.chat.completions.create(
       {
         model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
+        ...(isLocalProvider ? { think: false } : {}),
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You are the primary scheduling planner for a nonprofit. Build the best possible weekly schedule from the supplied workers and shifts. Return JSON only with an assignments array. Every assignment must use existing workerId and shiftId values and include startTime, endTime, and a short reason. Fill high and urgent work first, distribute hours across the week, honor availability, roles, supervisor requirements, worker type, desired and maximum hours, max shifts, no overlaps, volunteer limits, paid limits, and shift headcount. Never invent people, shifts, qualifications, availability, or hours. It is acceptable to leave a shift uncovered when no valid worker exists. For daily rosters, choose staggered segments inside the shift window. Do not include markdown or any fields other than assignments.",
+              "Return compact JSON only with an assignments array. Use only supplied workerId and shiftId values. Include startTime, endTime, and a short reason. Prioritize urgent/high shifts, availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount. For daily rosters, use staggered segments within the shift window. Never invent IDs or facts; leave impossible work uncovered. No markdown or extra fields.",
           },
           { role: "user", content: JSON.stringify(buildPromptContext(workers, shifts)) },
         ],
       },
-      { signal: AbortSignal.timeout(20_000) },
+      { signal: AbortSignal.timeout(isLocalProvider ? 180_000 : 20_000) },
     );
     const content = completion.choices[0]?.message.content;
     if (!content) throw new Error("The scheduling model returned no content.");
     const parsed = aiProposalSchema.parse(JSON.parse(content));
     const result = buildScheduleFromAiProposals(parsed.assignments, workers, shifts);
-    return { result, source: "openai" };
+    const requiredAssignments = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
+    return {
+      result,
+      source: "openai",
+      warning: parsed.assignments.length < requiredAssignments
+        ? `AI returned ${parsed.assignments.length} of ${requiredAssignments} requested positions; the deterministic safety pass repaired the remaining coverage.`
+        : undefined,
+    };
   } catch {
     return {
       result: deterministic(),

@@ -5,7 +5,6 @@ function buildPromptContext(workers, shifts) {
   return {
     workers: workers.map((worker) => ({
       id: worker.id,
-      name: worker.name,
       workerType: worker.workerType,
       employmentType: worker.employmentType,
       roles: worker.roles,
@@ -16,15 +15,12 @@ function buildPromptContext(workers, shifts) {
       maxHoursPerWeek: worker.maxHoursPerWeek,
       maxShiftsPerWeek: worker.maxShiftsPerWeek,
       reliabilityScore: worker.reliabilityScore,
-      notes: worker.notes,
     })),
     shifts: shifts.map((shift) => ({
       id: shift.id,
-      title: shift.title,
       date: shift.date,
       startTime: shift.startTime,
       endTime: shift.endTime,
-      location: shift.location,
       requiredRole: shift.requiredRole,
       requiredWorkers: shift.requiredWorkers,
       requiresSupervisor: shift.requiresSupervisor,
@@ -35,7 +31,6 @@ function buildPromptContext(workers, shifts) {
       minPaidStaff: shift.minPaidStaff,
       maxPaidStaff: shift.maxPaidStaff,
       priority: shift.priority,
-      notes: shift.notes,
     })),
   };
 }
@@ -82,7 +77,7 @@ async function requestProposals(workers, shifts, config = {}) {
           {
             role: "system",
             content:
-              "You are the primary scheduling planner for a nonprofit. Build the best possible weekly schedule from the supplied workers and shifts. Return JSON only with an assignments array. Every assignment must use existing workerId and shiftId values and include startTime, endTime, and a short reason. Fill high and urgent work first, distribute hours across the week, honor availability, roles, supervisor requirements, worker type, desired and maximum hours, max shifts, no overlaps, volunteer limits, paid limits, and shift headcount. Never invent people, shifts, qualifications, availability, or hours. It is acceptable to leave a shift uncovered when no valid worker exists. For daily rosters, choose staggered segments inside the shift window. Do not include markdown or any fields other than assignments.",
+              "Return compact JSON only with an assignments array. Use only supplied workerId and shiftId values. Include startTime, endTime, and a short reason. Prioritize urgent/high shifts, availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount. For daily rosters, use staggered segments within the shift window. Never invent IDs or facts; leave impossible work uncovered. No markdown or extra fields.",
           },
           { role: "user", content: JSON.stringify(buildPromptContext(workers, shifts)) },
         ],
@@ -95,9 +90,14 @@ async function requestProposals(workers, shifts, config = {}) {
     const workerIds = new Set(workers.map((worker) => worker.id));
     const shiftIds = new Set(shifts.map((shift) => shift.id));
     if (!Array.isArray(parsed.assignments)) throw new Error("The scheduling model returned no assignments.");
+    const assignments = parsed.assignments.filter((value) => isProposal(value, workerIds, shiftIds)).slice(0, 10_000);
+    const requiredAssignments = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
     return {
       source: "openai",
-      assignments: parsed.assignments.filter((value) => isProposal(value, workerIds, shiftIds)).slice(0, 10_000),
+      assignments,
+      warning: assignments.length < requiredAssignments
+        ? `Ollama returned ${assignments.length} of ${requiredAssignments} requested positions; the deterministic safety pass will repair the remaining coverage.`
+        : undefined,
     };
   } catch {
     return {

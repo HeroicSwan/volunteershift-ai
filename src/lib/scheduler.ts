@@ -61,6 +61,15 @@ type SchedulingPlan = {
   dateRank: Map<string, number>;
 };
 
+type AssignmentIndex = {
+  length: number;
+  byWorker: Map<string, ScheduleAssignment[]>;
+  byShift: Map<string, ScheduleAssignment[]>;
+};
+
+const assignmentIndexes = new WeakMap<ScheduleAssignment[], AssignmentIndex>();
+const workerRoleIndexes = new WeakMap<Worker[], Map<string, Worker[]>>();
+
 const WEEKDAYS: DayOfWeek[] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const PRIORITY_ORDER: Record<ShiftPriority, number> = { Urgent: 4, High: 3, Normal: 2, Low: 1 };
 const RISK_ORDER: Record<CoverageRiskLevel, number> = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -194,10 +203,8 @@ function getMaxHours(worker: Worker) {
 }
 
 function getWorkerWeekAssignments(workerId: string, assignments: ScheduleAssignment[], weekKey?: string) {
-  return assignments.filter(
-    (assignment) =>
-      assignment.workerId === workerId && (!weekKey || getWeekKey(assignment.shift.date) === weekKey),
-  );
+  const workerAssignments = getAssignmentIndex(assignments).byWorker.get(workerId) ?? [];
+  return weekKey ? workerAssignments.filter((assignment) => getWeekKey(assignment.shift.date) === weekKey) : workerAssignments;
 }
 
 function countWorkerAssignments(workerId: string, assignments: ScheduleAssignment[], weekKey?: string) {
@@ -214,7 +221,66 @@ function countWorkerHours(workerId: string, assignments: ScheduleAssignment[], w
 }
 
 function getShiftAssignments(shift: Shift, assignments: ScheduleAssignment[]) {
-  return assignments.filter((assignment) => assignment.shiftId === shift.id);
+  return getAssignmentIndex(assignments).byShift.get(shift.id) ?? [];
+}
+
+function buildAssignmentIndex(assignments: ScheduleAssignment[]): AssignmentIndex {
+  const index: AssignmentIndex = { length: assignments.length, byWorker: new Map(), byShift: new Map() };
+  for (const assignment of assignments) {
+    const workerAssignments = index.byWorker.get(assignment.workerId) ?? [];
+    workerAssignments.push(assignment);
+    index.byWorker.set(assignment.workerId, workerAssignments);
+    const shiftAssignments = index.byShift.get(assignment.shiftId) ?? [];
+    shiftAssignments.push(assignment);
+    index.byShift.set(assignment.shiftId, shiftAssignments);
+  }
+  return index;
+}
+
+function getAssignmentIndex(assignments: ScheduleAssignment[]) {
+  const cached = assignmentIndexes.get(assignments);
+  if (cached && cached.length === assignments.length) return cached;
+  const index = buildAssignmentIndex(assignments);
+  assignmentIndexes.set(assignments, index);
+  return index;
+}
+
+function getWorkersForRole(workers: Worker[], role: string) {
+  let index = workerRoleIndexes.get(workers);
+  if (!index) {
+    index = new Map();
+    for (const worker of workers) {
+      for (const workerRole of worker.roles) index.set(workerRole, [...(index.get(workerRole) ?? []), worker]);
+    }
+    workerRoleIndexes.set(workers, index);
+  }
+  return index.get(role) ?? [];
+}
+
+function registerAssignment(assignments: ScheduleAssignment[], assignment: ScheduleAssignment) {
+  const index = assignmentIndexes.get(assignments);
+  if (!index) return;
+  const workerAssignments = index.byWorker.get(assignment.workerId) ?? [];
+  workerAssignments.push(assignment);
+  index.byWorker.set(assignment.workerId, workerAssignments);
+  const shiftAssignments = index.byShift.get(assignment.shiftId) ?? [];
+  shiftAssignments.push(assignment);
+  index.byShift.set(assignment.shiftId, shiftAssignments);
+  index.length = assignments.length;
+}
+
+function invalidateAssignmentIndex(assignments: ScheduleAssignment[]) {
+  assignmentIndexes.delete(assignments);
+}
+
+function hasWorkerConflict(workerId: string, sourceShift: Shift, assignments: ScheduleAssignment[]) {
+  return getWorkerWeekAssignments(workerId, assignments, getWeekKey(sourceShift.date)).some(
+    (assignment) =>
+      assignment.shiftId === sourceShift.id ||
+      (assignment.shift.date === sourceShift.date &&
+        sourceShift.startTime < assignmentEndTime(assignment) &&
+        sourceShift.endTime > assignmentStartTime(assignment)),
+  );
 }
 
 function assignmentCovers(assignment: ScheduleAssignment, startTime: string, endTime: string) {
@@ -390,7 +456,7 @@ export function calculateMatchScore(
 
   if (!isAvailable(worker, shift)) return { eligible: false, score: 0, reasons, warnings: ["Not available for the full assignment"] };
   if (!worker.roles.includes(shift.requiredRole)) return { eligible: false, score: 0, reasons, warnings: [`Not qualified for ${shift.requiredRole}`] };
-  if (assignments.some((assignment) => assignment.workerId === worker.id && assignment.shiftId === shift.id)) {
+  if (getWorkerWeekAssignments(worker.id, assignments, getWeekKey(shift.date)).some((assignment) => assignment.shiftId === shift.id)) {
     return { eligible: false, score: 0, reasons, warnings: ["Worker already has an assignment in this operating window"] };
   }
   if (weekAssignments >= worker.maxShiftsPerWeek) return { eligible: false, score: 0, reasons, warnings: ["Weekly shift limit reached"] };
@@ -530,10 +596,8 @@ function getCandidateBalance(
 
 function getShiftScarcity(shift: Shift, workers: Worker[]) {
   const ratios = buildSlots(shift).map((slot) => {
-    const eligible = workers.filter(
-      (worker) =>
-        worker.roles.includes(shift.requiredRole) &&
-        availableUntil(worker, shift, slot.startTime) >= timeToMinutes(slot.endTime),
+    const eligible = getWorkersForRole(workers, shift.requiredRole).filter(
+      (worker) => availableUntil(worker, shift, slot.startTime) >= timeToMinutes(slot.endTime),
     );
     const coverageRatio = eligible.length / Math.max(shift.requiredWorkers, 1);
     const supervisorRatio = shift.requiresSupervisor
@@ -553,7 +617,8 @@ export function getEligibleWorkersForShift(
   currentAssignments: ScheduleAssignment[],
   allowRoleMismatch = false,
 ) {
-  return workers.filter((worker) =>
+  const pool = allowRoleMismatch ? workers : getWorkersForRole(workers, shift.requiredRole);
+  return pool.filter((worker) =>
     calculateWorkerMatchScore(worker, shift, currentAssignments, { allowRoleMismatch }).eligible,
   );
 }
@@ -561,9 +626,11 @@ export function getEligibleWorkersForShift(
 export function getShiftDifficultyScore(
   shift: Shift,
   workers: Worker[],
-  currentAssignments: ScheduleAssignment[] = [],
+  _currentAssignments: ScheduleAssignment[] = [],
 ) {
-  const eligible = getEligibleWorkersForShift(shift, workers, currentAssignments).length;
+  const eligible = getWorkersForRole(workers, shift.requiredRole).filter(
+    (worker) => isAvailable(worker, shift) && countWorkerAssignments(worker.id, _currentAssignments, getWeekKey(shift.date)) < worker.maxShiftsPerWeek,
+  ).length;
   const demandPressure = shift.requiredWorkers / Math.max(eligible, 0.5);
   return (
     PRIORITY_ORDER[shift.priority] * 100 +
@@ -586,17 +653,8 @@ function rankCandidates(
   // for cost once coverage is safe.
   const forcePaidFirst = shift.priority === "Urgent" || Boolean(context.hardToFill);
   return pool
-    .filter((worker) => !assignments.some((assignment) =>
-      assignment.workerId === worker.id &&
-      (
-        assignment.shiftId === sourceShift.id ||
-        (
-          assignment.shift.date === sourceShift.date &&
-          sourceShift.startTime < assignment.shift.endTime &&
-          sourceShift.endTime > assignment.shift.startTime
-        )
-      ),
-    ))
+    .filter((worker) => worker.roles.includes(shift.requiredRole) && isAvailable(worker, shift))
+    .filter((worker) => !hasWorkerConflict(worker.id, sourceShift, assignments))
     .flatMap((worker): Candidate[] => {
       const endTime = chooseAssignmentEnd(worker, sourceShift, shift.startTime, assignments);
       if (!endTime) return [];
@@ -673,6 +731,7 @@ function commitCandidate(
     warnings,
   };
   assignments.push(assignment);
+  registerAssignment(assignments, assignment);
   return assignment;
 }
 
@@ -907,7 +966,7 @@ function rankLargeShiftWorkers(shift: Shift, workers: Worker[], assignments: Sch
   const assignmentHours = shiftDurationHours(shift);
   return workers
     .flatMap((worker) => {
-      const workerAssignments = assignments.filter((assignment) => assignment.workerId === worker.id);
+      const workerAssignments = getWorkerWeekAssignments(worker.id, assignments);
       const weekAssignments = workerAssignments.filter((assignment) => getWeekKey(assignment.shift.date) === week);
       const weekHours = round(weekAssignments.reduce((sum, assignment) => sum + getAssignmentDurationHours(assignment), 0));
       const conflicts = workerAssignments.some(
@@ -1275,8 +1334,9 @@ function capRepairEndAtRecoveredCoverage(
 
 export function repairUncoveredShifts(context: ScheduleContext, maximumRepairAttempts = Number.POSITIVE_INFINITY) {
   let repairAttempts = 0;
+  const difficulty = new Map(context.shifts.map((shift) => [shift.id, getShiftDifficultyScore(shift, context.workers, context.assignments)]));
   const ordered = [...context.shifts].sort(
-    (a, b) => getShiftDifficultyScore(b, context.workers, context.assignments) - getShiftDifficultyScore(a, context.workers, context.assignments),
+    (a, b) => (difficulty.get(b.id) ?? 0) - (difficulty.get(a.id) ?? 0),
   );
   for (const sourceShift of ordered) {
     if (sourceShift.staffingMode === "daily_roster") continue;
@@ -1326,6 +1386,7 @@ export function repairUncoveredShifts(context: ScheduleContext, maximumRepairAtt
                 { hardToFill: true, allShifts: context.shifts },
               );
               if (!extended) continue;
+              invalidateAssignmentIndex(context.assignments);
               context.assignments.splice(context.assignments.indexOf(oldAssignment), 1);
               commitCandidate(extended, sourceShift, context.assignments, "Extended earlier during the coverage repair pass");
               repaired = true;
@@ -1353,6 +1414,7 @@ export function repairUncoveredShifts(context: ScheduleContext, maximumRepairAtt
               ? exactCandidate(blocker, sourceShift, slot.startTime, movedEnd, withoutOld, { hardToFill: true, allShifts: context.shifts })
               : undefined;
             if (!replacement || !moved) continue;
+            invalidateAssignmentIndex(context.assignments);
             context.assignments.splice(context.assignments.indexOf(oldAssignment), 1);
             commitCandidate(replacement, oldAssignment.shift, context.assignments, "Rebalanced to unlock harder coverage");
             commitCandidate(moved, sourceShift, context.assignments, "Moved during the coverage repair pass");
@@ -1398,6 +1460,7 @@ export function rebalanceOverloadedWorkers(context: ScheduleContext, maximumPass
       })
       .sort((a, b) => a.assignedHours - b.assignedHours || b.candidate.evaluation.score - a.candidate.evaluation.score)[0];
     if (!replacement) break;
+    invalidateAssignmentIndex(context.assignments);
     context.assignments.splice(context.assignments.indexOf(oldAssignment), 1);
     commitCandidate(replacement.candidate, oldAssignment.shift, context.assignments, "Rebalanced for a fairer weekly workload");
   }
@@ -1408,7 +1471,7 @@ export function validateFinalSchedule(context: ScheduleContext): ScheduleValidat
   const issues: ScheduleValidationResult["issues"] = [];
   const shiftResults = buildShiftResults(context);
   for (const worker of context.workers) {
-    const assignments = context.assignments.filter((assignment) => assignment.workerId === worker.id);
+    const assignments = getWorkerWeekAssignments(worker.id, context.assignments);
     const weeks = [...new Set(assignments.map((assignment) => getWeekKey(assignment.shift.date)))];
     for (const week of weeks) {
       if (countWorkerAssignments(worker.id, assignments, week) > worker.maxShiftsPerWeek) {
@@ -1553,7 +1616,7 @@ function getScheduleQuality(result: OptimizedScheduleResult, workers: Worker[], 
   const loadRatios: number[] = [];
   for (const worker of workers) {
     const byWeek = new Map<string, ScheduleAssignment[]>();
-    for (const assignment of result.assignments.filter((item) => item.workerId === worker.id)) {
+    for (const assignment of getWorkerWeekAssignments(worker.id, result.assignments)) {
       const week = getWeekKey(assignment.shift.date);
       byWeek.set(week, [...(byWeek.get(week) ?? []), assignment]);
     }
