@@ -58,5 +58,30 @@ describe("AI schedule provider contract", () => {
     const result = await generateAiSchedule([worker], [shift, secondShift]);
     expect(result.result.assignments).toHaveLength(1); expect(result.result.validation.valid).toBe(true);
   });
-});
 
+  it("batches qwen3 requests and retries incomplete output", async () => {
+    vi.stubEnv("OPENAI_MODEL", "qwen3:8b");
+    vi.stubEnv("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1");
+    createCompletion
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({ assignments: [] }) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({ assignments: [proposal] }) } }] });
+    const result = await generateAiSchedule([worker], [shift]);
+    expect(createCompletion).toHaveBeenCalledTimes(2);
+    expect(result.source).toBe("openai");
+    expect(result.proposalCoverage).toMatchObject({ requested: 1, proposed: 1, batches: 1, retries: 1 });
+    expect(result.result.validation.valid).toBe(true);
+  });
+
+  it("reports qwen3 proposal coverage when a batch remains incomplete", async () => {
+    vi.stubEnv("OPENAI_MODEL", "qwen3:8b");
+    vi.stubEnv("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1");
+    const shifts = Array.from({ length: 5 }, (_, index) => ({ ...shift, id: "shift-" + (index + 1), date: "2026-07-" + (20 + index) }));
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ assignments: [proposal] }) } }] });
+    const result = await generateAiSchedule([worker], shifts);
+    expect(createCompletion).toHaveBeenCalledTimes(4);
+    expect(result.source).toBe("openai");
+    expect(result.proposalCoverage?.batches).toBe(2);
+    expect(result.proposalCoverage?.coveragePercent).toBeLessThan(100);
+    expect(result.warning).toContain("qwen3 batches");
+  });
+});

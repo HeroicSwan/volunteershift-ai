@@ -78,6 +78,7 @@ export default function ResultsPage() {
     scheduleGeneratedAt,
     scheduleGenerationSource,
     scheduleGenerationWarning,
+    scheduleProposalCoverage,
     hydrated,
   } = useVolunteerMatcherData();
 
@@ -205,8 +206,21 @@ export default function ResultsPage() {
 
       {scheduleGenerationWarning && (
         <Card className="border-ochre/40 bg-ochre/10 p-4 text-sm text-ink">
-          <p className="font-semibold">Generation fallback used</p>
+          <p className="font-semibold">
+            {scheduleGenerationSource === "openai" ? "AI proposals completed by safety scheduler" : "Deterministic safety scheduler used"}
+          </p>
           <p className="mt-1 text-ink-soft">{scheduleGenerationWarning}</p>
+        </Card>
+      )}
+
+      {scheduleProposalCoverage && scheduleGenerationSource === "openai" && (
+        <Card className="border-sage/40 bg-sage/10 p-4 text-sm text-ink">
+          <p className="font-semibold">AI proposal coverage: {scheduleProposalCoverage.coveragePercent}%</p>
+          <p className="mt-1 text-ink-soft">
+            Ollama proposed {scheduleProposalCoverage.proposed} of {scheduleProposalCoverage.requested} requested positions across {scheduleProposalCoverage.batches} batch{scheduleProposalCoverage.batches === 1 ? "" : "es"}.
+            {scheduleProposalCoverage.retries ? " " + scheduleProposalCoverage.retries + " repair " + (scheduleProposalCoverage.retries === 1 ? "attempt was" : "attempts were") + " made." : ""}
+            {" "}The deterministic safety layer validated and completed the schedule.
+          </p>
         </Card>
       )}
 

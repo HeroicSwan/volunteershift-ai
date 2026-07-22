@@ -1,10 +1,11 @@
-import type { Worker, Shift } from "./index";
+import type { Worker, Shift, AiProposalCoverage } from "./index";
 import type { AiScheduleProposal } from "../lib/ai-schedule-proposals";
 
 type DesktopScheduleResponse = {
   source: "openai" | "deterministic";
   assignments: AiScheduleProposal[];
   warning?: string;
+  proposalCoverage?: AiProposalCoverage;
 };
 type DesktopAiConfig = {
   configured: boolean;

@@ -1,5 +1,6 @@
 const MODEL_TIMEOUT_MS = 20_000;
-const LOCAL_MODEL_TIMEOUT_MS = 180_000;
+const LOCAL_MODEL_TIMEOUT_MS = 90_000;
+const QWEN3_BATCH_SIZE = 4;
 
 function buildPromptContext(workers, shifts) {
   return {
@@ -49,12 +50,24 @@ function isProposal(value, workerIds, shiftIds) {
   );
 }
 
+function getRelevantWorkers(workers, shifts) {
+  const roles = new Set(shifts.map((shift) => shift.requiredRole.toLowerCase()));
+  const supervisorNeeded = shifts.some((shift) => shift.requiresSupervisor);
+  const relevant = workers.filter((worker) =>
+    worker.roles.some((role) => roles.has(role.toLowerCase())) ||
+    (supervisorNeeded && worker.workerType === "supervisor"),
+  );
+  return relevant.length ? relevant : workers;
+}
+
 async function requestProposals(workers, shifts, config = {}) {
   const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+  const requiredAssignments = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
   if (!apiKey) {
     return {
       source: "deterministic",
       assignments: [],
+      proposalCoverage: { requested: requiredAssignments, proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
       warning: "No AI API key is configured for the desktop app, so the deterministic safety scheduler was used.",
     };
   }
@@ -62,50 +75,90 @@ async function requestProposals(workers, shifts, config = {}) {
   try {
     const baseUrl = config.baseUrl || process.env.OPENAI_BASE_URL || "";
     const isLocalProvider = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl);
+    const model = config.model || process.env.OPENAI_MODEL || "gpt-5.4-mini";
+    const isQwen3 = /qwen3/i.test(model);
     const timeoutMs = isLocalProvider ? LOCAL_MODEL_TIMEOUT_MS : MODEL_TIMEOUT_MS;
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,
       baseURL: config.baseUrl || process.env.OPENAI_BASE_URL || undefined,
     });
-    const completion = await client.chat.completions.create(
-      {
-        model: config.model || process.env.OPENAI_MODEL || "gpt-5.4-mini",
-        ...(isLocalProvider ? { think: false } : {}),
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Return compact JSON only with an assignments array. Use only supplied workerId and shiftId values. Include startTime, endTime, and a short reason. Prioritize urgent/high shifts, availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount. For daily rosters, use staggered segments within the shift window. Never invent IDs or facts; leave impossible work uncovered. No markdown or extra fields.",
-          },
-          { role: "user", content: JSON.stringify(buildPromptContext(workers, shifts)) },
-        ],
-      },
-      { signal: AbortSignal.timeout(timeoutMs) },
-    );
-    const content = completion.choices[0]?.message.content;
-    if (!content) throw new Error("The scheduling model returned no content.");
-    const parsed = JSON.parse(content);
     const workerIds = new Set(workers.map((worker) => worker.id));
     const shiftIds = new Set(shifts.map((shift) => shift.id));
-    if (!Array.isArray(parsed.assignments)) throw new Error("The scheduling model returned no assignments.");
-    const assignments = parsed.assignments.filter((value) => isProposal(value, workerIds, shiftIds)).slice(0, 10_000);
-    const requiredAssignments = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
+    const batches = isQwen3 ? chunkShifts(shifts, QWEN3_BATCH_SIZE) : [shifts];
+    const assignments = [];
+    let completedBatches = 0;
+    let retries = 0;
+    const warnings = [];
+
+    for (const batch of batches) {
+      const batchRequired = batch.reduce((total, shift) => total + shift.requiredWorkers, 0);
+      let batchAssignments = [];
+      let lastError;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const completion = await client.chat.completions.create(
+            {
+              model,
+              ...(isLocalProvider ? { think: false } : {}),
+              response_format: { type: "json_object" },
+              messages: [
+                {
+                  role: "system",
+                  content: `${isQwen3 ? "You are planning one small batch of a weekly roster. " : ""}Return compact JSON only: {\"assignments\":[...]}. Use only supplied IDs. Each item needs workerId, shiftId, startTime, endTime, and optional reason. Respect availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount. Use staggered segments inside each shift. Never invent IDs; leave impossible work uncovered. No markdown. ${attempt ? "REPAIR: return valid assignments for every feasible position in this batch and nothing else." : ""}`,
+                },
+                { role: "user", content: JSON.stringify(buildPromptContext(getRelevantWorkers(workers, batch), batch)) },
+              ],
+            },
+            { signal: AbortSignal.timeout(timeoutMs) },
+          );
+          const content = completion.choices[0]?.message.content;
+          if (!content) throw new Error("The scheduling model returned no content.");
+          const parsed = JSON.parse(content);
+          if (!Array.isArray(parsed.assignments)) throw new Error("The scheduling model returned no assignments.");
+          batchAssignments = parsed.assignments.filter((value) => isProposal(value, workerIds, shiftIds));
+          if (batchAssignments.length >= batchRequired || attempt === 1) break;
+          retries += 1;
+        } catch (error) {
+          lastError = error;
+          if (attempt === 0) { retries += 1; continue; }
+        }
+      }
+      if (lastError && batchAssignments.length === 0) warnings.push(`Batch ${batch[0]?.date ?? "unknown"} failed: ${lastError.message}`);
+      if (batchAssignments.length > 0) completedBatches += 1;
+      for (const assignment of batchAssignments) {
+        const key = `${assignment.workerId}:${assignment.shiftId}`;
+        if (!assignments.some((item) => `${item.workerId}:${item.shiftId}` === key)) assignments.push(assignment);
+      }
+    }
+    const coveragePercent = requiredAssignments ? Math.round((assignments.length / requiredAssignments) * 100) : 100;
     return {
       source: "openai",
       assignments,
-      warning: assignments.length < requiredAssignments
-        ? `Ollama returned ${assignments.length} of ${requiredAssignments} requested positions; the deterministic safety pass will repair the remaining coverage.`
+      proposalCoverage: { requested: requiredAssignments, proposed: assignments.length, coveragePercent, batches: batches.length, completedBatches, retries },
+      warning: assignments.length < requiredAssignments || warnings.length
+        ? `Ollama proposed ${assignments.length} of ${requiredAssignments} positions across ${batches.length} ${isQwen3 ? "qwen3 batches" : "request"}; the deterministic safety pass will repair the remainder.${warnings.length ? ` ${warnings.join(" ")}` : ""}`
         : undefined,
     };
   } catch {
     return {
       source: "deterministic",
       assignments: [],
+      proposalCoverage: { requested: requiredAssignments, proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
       warning: "The desktop AI service was unavailable or returned an unsafe plan, so the deterministic safety scheduler was used.",
     };
   }
+}
+
+function chunkShifts(shifts, size) {
+  const ordered = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || priorityRank(b.priority) - priorityRank(a.priority));
+  const batches = [];
+  for (let index = 0; index < ordered.length; index += size) batches.push(ordered.slice(index, index + size));
+  return batches.length ? batches : [[]];
+}
+
+function priorityRank(priority) {
+  return { Urgent: 4, High: 3, Normal: 2, Low: 1 }[priority] || 0;
 }
 
 module.exports = { requestProposals };

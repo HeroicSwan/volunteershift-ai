@@ -192,6 +192,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             : generateOptimizedSchedule(data.workers, data.shifts),
           source: proposalResponse.source,
           warning: proposalResponse.warning,
+          proposalCoverage: proposalResponse.proposalCoverage,
         };
       } else {
         const response = await fetch("/api/generate-schedule", {
@@ -207,6 +208,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         result: generateOptimizedSchedule(data.workers, data.shifts),
         source: "deterministic",
         warning: "The AI scheduling service could not be reached, so the deterministic safety scheduler was used.",
+        proposalCoverage: { requested: data.shifts.reduce((total, shift) => total + shift.requiredWorkers, 0), proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
       };
     }
     saveData({
@@ -215,6 +217,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       scheduleGeneratedAt: new Date().toISOString(),
       scheduleGenerationSource: generated.source,
       scheduleGenerationWarning: generated.warning,
+      scheduleProposalCoverage: generated.proposalCoverage,
     });
     return generated;
   }

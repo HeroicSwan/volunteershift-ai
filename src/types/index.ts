@@ -201,6 +201,15 @@ export type OptimizedScheduleResult = {
 
 export type ScheduleGenerationSource = "openai" | "deterministic";
 
+export type AiProposalCoverage = {
+  requested: number;
+  proposed: number;
+  coveragePercent: number;
+  batches: number;
+  completedBatches: number;
+  retries: number;
+};
+
 export type ShiftScheduleResult = {
   shiftId: string;
   assignedWorkers: ScheduleAssignment[];
@@ -256,6 +265,7 @@ export type VolunteerMatcherData = {
   scheduleGeneratedAt?: string;
   scheduleGenerationSource?: ScheduleGenerationSource;
   scheduleGenerationWarning?: string;
+  scheduleProposalCoverage?: AiProposalCoverage;
 };
 
 export type WorkerInput = Omit<Worker, "id">;

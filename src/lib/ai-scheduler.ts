@@ -4,6 +4,7 @@ import {
 } from "./scheduler";
 import { aiProposalSchema, buildScheduleFromAiProposals } from "./ai-schedule-proposals";
 import type {
+  AiProposalCoverage,
   OptimizedScheduleResult,
   ScheduleGenerationSource,
   Shift,
@@ -14,6 +15,7 @@ export type AiScheduleGeneration = {
   result: OptimizedScheduleResult;
   source: ScheduleGenerationSource;
   warning?: string;
+  proposalCoverage?: AiProposalCoverage;
 };
 
 function buildPromptContext(workers: Worker[], shifts: Shift[]) {
@@ -50,50 +52,114 @@ function buildPromptContext(workers: Worker[], shifts: Shift[]) {
   };
 }
 
+const QWEN3_BATCH_SIZE = 4;
+
+function priorityRank(priority: Shift["priority"]) {
+  return { Urgent: 4, High: 3, Normal: 2, Low: 1 }[priority];
+}
+
+function chunkShifts(shifts: Shift[], size: number) {
+  const ordered = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || priorityRank(b.priority) - priorityRank(a.priority));
+  const batches: Shift[][] = [];
+  for (let index = 0; index < ordered.length; index += size) batches.push(ordered.slice(index, index + size));
+  return batches.length ? batches : [[]];
+}
+
+function parseProposals(content: string, workers: Worker[], shifts: Shift[]) {
+  const parsed = aiProposalSchema.parse(JSON.parse(content));
+  const workerIds = new Set(workers.map((worker) => worker.id));
+  const shiftIds = new Set(shifts.map((shift) => shift.id));
+  return parsed.assignments.filter((proposal) => workerIds.has(proposal.workerId) && shiftIds.has(proposal.shiftId));
+}
+
+function getRelevantWorkers(workers: Worker[], shifts: Shift[]) {
+  const roles = new Set(shifts.map((shift) => shift.requiredRole.toLowerCase()));
+  const supervisorNeeded = shifts.some((shift) => shift.requiresSupervisor);
+  const relevant = workers.filter((worker) =>
+    worker.roles.some((role) => roles.has(role.toLowerCase())) ||
+    (supervisorNeeded && worker.workerType === "supervisor"),
+  );
+  return relevant.length ? relevant : workers;
+}
+
 export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Promise<AiScheduleGeneration> {
   const deterministic = () => generateOptimizedSchedule(workers, shifts);
+  const requested = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return {
       result: deterministic(),
       source: "deterministic",
       warning: "No AI API key is configured, so the deterministic safety scheduler was used.",
+      proposalCoverage: { requested, proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
     };
   }
 
   try {
     const baseUrl = process.env.OPENAI_BASE_URL || "";
     const isLocalProvider = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl);
+    const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+    const isQwen3 = /qwen3/i.test(model);
     const client = new OpenAI({
       apiKey,
       baseURL: baseUrl || undefined,
     });
-    const completion = await client.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
-        ...(isLocalProvider ? { think: false } : {}),
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Return compact JSON only with an assignments array. Use only supplied workerId and shiftId values. Include startTime, endTime, and a short reason. Prioritize urgent/high shifts, availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount. For daily rosters, use staggered segments within the shift window. Never invent IDs or facts; leave impossible work uncovered. No markdown or extra fields.",
-          },
-          { role: "user", content: JSON.stringify(buildPromptContext(workers, shifts)) },
-        ],
-      },
-      { signal: AbortSignal.timeout(isLocalProvider ? 180_000 : 20_000) },
-    );
-    const content = completion.choices[0]?.message.content;
-    if (!content) throw new Error("The scheduling model returned no content.");
-    const parsed = aiProposalSchema.parse(JSON.parse(content));
-    const result = buildScheduleFromAiProposals(parsed.assignments, workers, shifts);
-    const requiredAssignments = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
+    const batches = isQwen3 ? chunkShifts(shifts, QWEN3_BATCH_SIZE) : [shifts];
+    const proposals: ReturnType<typeof parseProposals> = [];
+    const failedBatches: string[] = [];
+    let completedBatches = 0;
+    let retries = 0;
+    for (const batch of batches) {
+      const batchRequired = batch.reduce((total, shift) => total + shift.requiredWorkers, 0);
+      let batchProposals: ReturnType<typeof parseProposals> = [];
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const completion = await client.chat.completions.create(
+            {
+              model,
+              ...(isLocalProvider ? { think: false } : {}),
+              response_format: { type: "json_object" },
+              messages: [
+                {
+                  role: "system",
+                  content: [
+                    isQwen3 ? "Plan one small batch of a weekly roster." : "Plan this roster.",
+                    "Return compact JSON only: {\"assignments\":[...]}. Use only supplied IDs.",
+                    "Each item needs workerId, shiftId, startTime, endTime, and optional reason.",
+                    "Respect availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount.",
+                    "Never invent IDs; leave impossible work uncovered. No markdown.",
+                    attempt ? "REPAIR: return valid assignments for every feasible position in this batch." : "",
+                  ].filter(Boolean).join(" "),
+                },
+                { role: "user", content: JSON.stringify(buildPromptContext(getRelevantWorkers(workers, batch), batch)) },
+              ],
+            },
+            { signal: AbortSignal.timeout(isLocalProvider ? 90_000 : 20_000) },
+          );
+          const content = completion.choices[0]?.message.content;
+          if (!content) throw new Error("The scheduling model returned no content.");
+          batchProposals = parseProposals(content, workers, batch);
+          if (batchProposals.length >= batchRequired || attempt === 1) break;
+          retries += 1;
+        } catch {
+          if (attempt === 0) { retries += 1; continue; }
+          failedBatches.push(batch[0]?.date ?? "unknown");
+        }
+      }
+      if (!isQwen3 && batchProposals.length === 0) throw new Error("The scheduling model returned no safe proposals.");
+      if (batchProposals.length > 0) completedBatches += 1;
+      for (const proposal of batchProposals) {
+        if (!proposals.some((item) => item.workerId === proposal.workerId && item.shiftId === proposal.shiftId)) proposals.push(proposal);
+      }
+    }
+    const result = buildScheduleFromAiProposals(proposals, workers, shifts);
+    const coveragePercent = requested ? Math.round((proposals.length / requested) * 100) : 100;
     return {
       result,
       source: "openai",
-      warning: parsed.assignments.length < requiredAssignments
-        ? `AI returned ${parsed.assignments.length} of ${requiredAssignments} requested positions; the deterministic safety pass repaired the remaining coverage.`
+      proposalCoverage: { requested, proposed: proposals.length, coveragePercent, batches: batches.length, completedBatches, retries },
+      warning: proposals.length < requested || failedBatches.length
+        ? "AI proposed " + proposals.length + " of " + requested + " positions across " + batches.length + " " + (isQwen3 ? "qwen3 batches" : "request") + "; the deterministic safety pass repaired the remainder." + (failedBatches.length ? " Failed batches: " + failedBatches.join(", ") + "." : "")
         : undefined,
     };
   } catch {
@@ -101,6 +167,7 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
       result: deterministic(),
       source: "deterministic",
       warning: "The AI scheduling service was unavailable or returned an unsafe plan, so the deterministic safety scheduler was used.",
+      proposalCoverage: { requested, proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
     };
   }
 }

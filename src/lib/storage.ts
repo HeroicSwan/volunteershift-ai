@@ -6,6 +6,7 @@ import {
   type Shift,
   type ShiftPriority,
   type ScheduleGenerationSource,
+  type AiProposalCoverage,
   type VolunteerMatcherData,
   type Worker,
   type WorkerType,
@@ -58,6 +59,7 @@ type StoredData = {
   scheduleGeneratedAt?: string;
   scheduleGenerationSource?: ScheduleGenerationSource;
   scheduleGenerationWarning?: string;
+  scheduleProposalCoverage?: AiProposalCoverage;
 };
 
 function normalizeWorker(worker: StoredWorker): Worker {
@@ -141,6 +143,7 @@ function normalizeData(data: StoredData): VolunteerMatcherData {
     scheduleGeneratedAt: data.scheduleGeneratedAt,
     scheduleGenerationSource: data.scheduleGenerationSource,
     scheduleGenerationWarning: data.scheduleGenerationWarning,
+    scheduleProposalCoverage: data.scheduleProposalCoverage,
   };
 }
 
