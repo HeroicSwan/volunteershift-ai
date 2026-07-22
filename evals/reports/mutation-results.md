@@ -26,3 +26,4 @@ Mutation score: 20/20 (100%)
 | forbidden-assignment-added | `FORBIDDEN_ASSIGNMENT_PRESENT` | killed |
 | invalid-shift-time | `INVALID_SHIFT_TIME` | killed |
 | duplicate-shift-id | `DUPLICATE_SHIFT_ID` | killed |
+
