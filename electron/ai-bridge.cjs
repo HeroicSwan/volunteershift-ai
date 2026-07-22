@@ -1,5 +1,5 @@
 const MODEL_TIMEOUT_MS = 20_000;
-const LOCAL_MODEL_TIMEOUT_MS = 90_000;
+const LOCAL_MODEL_TIMEOUT_MS = 600_000;
 const QWEN3_BATCH_SIZE = 4;
 
 function buildPromptContext(workers, shifts) {
@@ -92,6 +92,7 @@ async function requestProposals(workers, shifts, config = {}) {
     const warnings = [];
 
     for (const batch of batches) {
+      config.onProgress?.({ current: completedBatches + 1, total: batches.length, requested: requiredAssignments, proposed: assignments.length, status: "running" });
       const batchRequired = batch.reduce((total, shift) => total + shift.requiredWorkers, 0);
       let batchAssignments = [];
       let lastError;
@@ -110,7 +111,7 @@ async function requestProposals(workers, shifts, config = {}) {
                 { role: "user", content: JSON.stringify(buildPromptContext(getRelevantWorkers(workers, batch), batch)) },
               ],
             },
-            { signal: AbortSignal.timeout(timeoutMs) },
+            { signal: config.signal ? AbortSignal.any([config.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) },
           );
           const content = completion.choices[0]?.message.content;
           if (!content) throw new Error("The scheduling model returned no content.");
@@ -121,11 +122,13 @@ async function requestProposals(workers, shifts, config = {}) {
           retries += 1;
         } catch (error) {
           lastError = error;
+          if (config.signal?.aborted) throw error;
           if (attempt === 0) { retries += 1; continue; }
         }
       }
       if (lastError && batchAssignments.length === 0) warnings.push(`Batch ${batch[0]?.date ?? "unknown"} failed: ${lastError.message}`);
       if (batchAssignments.length > 0) completedBatches += 1;
+      config.onProgress?.({ current: completedBatches, total: batches.length, requested: requiredAssignments, proposed: assignments.length + batchAssignments.length, status: "batch-complete" });
       for (const assignment of batchAssignments) {
         const key = `${assignment.workerId}:${assignment.shiftId}`;
         if (!assignments.some((item) => `${item.workerId}:${item.shiftId}` === key)) assignments.push(assignment);
@@ -140,7 +143,16 @@ async function requestProposals(workers, shifts, config = {}) {
         ? `Ollama proposed ${assignments.length} of ${requiredAssignments} positions across ${batches.length} ${isQwen3 ? "qwen3 batches" : "request"}; the deterministic safety pass will repair the remainder.${warnings.length ? ` ${warnings.join(" ")}` : ""}`
         : undefined,
     };
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError" || config.signal?.aborted) {
+      return {
+        source: "deterministic",
+        assignments: [],
+        proposalCoverage: { requested: requiredAssignments, proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
+        cancelled: true,
+        warning: "AI planning was canceled. The deterministic safety scheduler was used instead.",
+      };
+    }
     return {
       source: "deterministic",
       assignments: [],

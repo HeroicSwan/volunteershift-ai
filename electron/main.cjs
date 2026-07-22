@@ -12,6 +12,7 @@ const DEV_URL = process.env.ELECTRON_START_URL;
 // Brand oat/sand background so there's no white flash before the app paints.
 const BRAND_BACKGROUND = "#d4b895";
 const AI_CREDENTIALS_FILE = "ai-credentials.json";
+const activeScheduleJobs = new Map();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -117,7 +118,27 @@ app.whenReady().then(() => {
     if (!payload || !Array.isArray(payload.workers) || !Array.isArray(payload.shifts)) {
       throw new Error("Workers and shifts are required");
     }
-    return requestProposals(payload.workers, payload.shifts, readStoredAiCredentials() || {});
+    const controller = new AbortController();
+    activeScheduleJobs.set(event.sender.id, controller);
+    try {
+      return await requestProposals(payload.workers, payload.shifts, {
+        ...(readStoredAiCredentials() || {}),
+        signal: controller.signal,
+        onProgress: (progress) => event.sender.send("schedule-progress", progress),
+      });
+    } finally {
+      activeScheduleJobs.delete(event.sender.id);
+    }
+  });
+
+  ipcMain.handle("cancel-schedule", (event) => {
+    if (!isTrustedRenderer(event)) throw new Error("Untrusted renderer");
+    const controller = activeScheduleJobs.get(event.sender.id);
+    if (controller) {
+      controller.abort();
+      return { cancelled: true };
+    }
+    return { cancelled: false };
   });
 
   ipcMain.handle("get-ai-config", (event) => {

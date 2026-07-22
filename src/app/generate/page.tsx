@@ -42,8 +42,10 @@ export default function GeneratePage() {
     scheduleGeneratedAt,
     scheduleGenerationSource,
     scheduleGenerationWarning,
+    scheduleProgress,
     hydrated,
     generateSchedule,
+    cancelSchedule,
   } = useVolunteerMatcherData();
   const [isGenerating, setIsGenerating] = useState(false);
   const hasData = workers.length > 0 && shifts.length > 0;
@@ -112,12 +114,24 @@ export default function GeneratePage() {
                   {isGenerating ? <RefreshCw className="animate-spin" size={17} /> : scheduleGeneratedAt ? <RefreshCw size={17} /> : <Sparkles size={17} />}
                   {isGenerating ? "Planning schedule…" : scheduleGeneratedAt ? "Regenerate schedule" : "Generate with AI"}
                 </Button>
+                {isGenerating && (
+                  <Button variant="secondary" onClick={() => void cancelSchedule()}>
+                    Cancel planning
+                  </Button>
+                )}
                 {scheduleGeneratedAt && (
                   <Link href="/results" className="inline-flex min-h-11 items-center gap-1.5 px-2 text-sm font-semibold text-moss hover:text-terracotta">
                     View {assignments.length} assignments <ArrowRight size={15} />
                   </Link>
                 )}
               </div>
+              {isGenerating && (
+                <p className="mt-3 text-xs text-ink-soft" role="status" aria-live="polite">
+                  {scheduleProgress
+                    ? "Planning batch " + scheduleProgress.current + " of " + scheduleProgress.total + "…"
+                    : "Starting Ollama… This can take several minutes on local hardware."}
+                </p>
+              )}
               {scheduleGenerationSource && (
                 <p className="mt-4 text-xs text-ink-soft">
                   Last run: {scheduleGenerationSource === "openai" ? "AI planner with safety validation" : "deterministic safety fallback"}.

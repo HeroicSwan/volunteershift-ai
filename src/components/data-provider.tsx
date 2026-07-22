@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createSampleData, createTestStaff, createTestStaffShifts } from "@/lib/sample-data";
 import { generateOptimizedSchedule } from "@/lib/scheduler";
 import { buildScheduleFromAiProposals } from "@/lib/ai-schedule-proposals";
@@ -31,6 +31,8 @@ type DataContextValue = VolunteerMatcherData & {
   importWorkers: (workers: WorkerInput[], mode: ImportMode) => void;
   importShifts: (shifts: ShiftInput[], mode: ImportMode) => void;
   generateSchedule: () => Promise<AiScheduleGeneration>;
+  scheduleProgress?: { current: number; total: number; requested: number; proposed: number; status: string };
+  cancelSchedule: () => Promise<void>;
 };
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -43,6 +45,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     () => false,
   );
   const data = useMemo<VolunteerMatcherData>(() => JSON.parse(snapshot), [snapshot]);
+  const [scheduleProgress, setScheduleProgress] = useState<DataContextValue["scheduleProgress"]>();
+
+  useEffect(() => {
+    const bridge = typeof window !== "undefined" ? window.volunteerShiftDesktop : undefined;
+    if (!bridge) return undefined;
+    return bridge.onScheduleProgress(setScheduleProgress);
+  }, []);
 
   function seedSampleData() {
     const sampleData = createSampleData();
@@ -219,7 +228,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       scheduleGenerationWarning: generated.warning,
       scheduleProposalCoverage: generated.proposalCoverage,
     });
+    setScheduleProgress(undefined);
     return generated;
+  }
+
+  async function cancelSchedule() {
+    const bridge = typeof window !== "undefined" ? window.volunteerShiftDesktop : undefined;
+    if (bridge) await bridge.cancelSchedule();
   }
 
   return (
@@ -238,6 +253,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         importWorkers,
         importShifts,
         generateSchedule,
+        scheduleProgress,
+        cancelSchedule,
       }}
     >
       {children}
