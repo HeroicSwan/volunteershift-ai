@@ -1,4 +1,5 @@
 const MODEL_TIMEOUT_MS = 20_000;
+const LOCAL_MODEL_TIMEOUT_MS = 90_000;
 
 function buildPromptContext(workers, shifts) {
   return {
@@ -64,6 +65,8 @@ async function requestProposals(workers, shifts, config = {}) {
   }
 
   try {
+    const baseUrl = config.baseUrl || process.env.OPENAI_BASE_URL || "";
+    const timeoutMs = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl) ? LOCAL_MODEL_TIMEOUT_MS : MODEL_TIMEOUT_MS;
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,
@@ -82,7 +85,7 @@ async function requestProposals(workers, shifts, config = {}) {
           { role: "user", content: JSON.stringify(buildPromptContext(workers, shifts)) },
         ],
       },
-      { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) },
+      { signal: AbortSignal.timeout(timeoutMs) },
     );
     const content = completion.choices[0]?.message.content;
     if (!content) throw new Error("The scheduling model returned no content.");
