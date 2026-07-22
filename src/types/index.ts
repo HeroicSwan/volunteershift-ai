@@ -208,6 +208,8 @@ export type AiProposalCoverage = {
   batches: number;
   completedBatches: number;
   retries: number;
+  rejected?: number;
+  repairNeeded?: number;
 };
 
 export type ShiftScheduleResult = {

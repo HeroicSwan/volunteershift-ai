@@ -72,6 +72,39 @@ function parseProposals(content: string, workers: Worker[], shifts: Shift[]) {
   return parsed.assignments.filter((proposal) => workerIds.has(proposal.workerId) && shiftIds.has(proposal.shiftId));
 }
 
+function minutes(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value || "");
+  return match ? Number(match[1]) * 60 + Number(match[2]) : Number.NaN;
+}
+
+function dayName(date: string) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(date + "T12:00:00Z"));
+}
+
+function filterSafeProposals(values: ReturnType<typeof parseProposals>, workers: Worker[], shifts: Shift[], prior: ReturnType<typeof parseProposals>) {
+  const workerById = new Map(workers.map((worker) => [worker.id, worker]));
+  const shiftById = new Map(shifts.map((shift) => [shift.id, shift]));
+  const accepted: typeof values = [];
+  const rejected: { workerId?: string; shiftId?: string; reason: string }[] = [];
+  const seen = new Set(prior.map((item) => item.workerId + ":" + item.shiftId));
+  for (const value of values) {
+    const worker = workerById.get(value.workerId);
+    const shift = shiftById.get(value.shiftId);
+    const reject = (reason: string) => rejected.push({ workerId: value.workerId, shiftId: value.shiftId, reason });
+    if (!worker || !shift) { reject("Invalid worker or shift ID."); continue; }
+    if (seen.has(value.workerId + ":" + value.shiftId)) { reject("Duplicate worker/shift assignment."); continue; }
+    if (minutes(value.startTime) < minutes(shift.startTime) || minutes(value.endTime) > minutes(shift.endTime) || minutes(value.endTime) <= minutes(value.startTime)) { reject("Assignment time is outside the shift window."); continue; }
+    if (shift.requiredRole && !worker.roles.some((role) => role.toLowerCase() === shift.requiredRole.toLowerCase())) { reject("Worker does not have the required role."); continue; }
+    const blocks = worker.availability[dayName(shift.date) as keyof Worker["availability"]] || [];
+    if (!blocks.some((block) => minutes(value.startTime) >= minutes(block.start) && minutes(value.endTime) <= minutes(block.end))) { reject("Worker is unavailable for this time."); continue; }
+    const workerPrior = prior.filter((item) => item.workerId === worker.id);
+    if (workerPrior.some((item) => minutes(value.startTime) < minutes(item.endTime) && minutes(value.endTime) > minutes(item.startTime))) { reject("Worker overlaps another assignment."); continue; }
+    accepted.push(value);
+    seen.add(value.workerId + ":" + value.shiftId);
+  }
+  return { accepted, rejected };
+}
+
 function getRelevantWorkers(workers: Worker[], shifts: Shift[]) {
   const roles = new Set(shifts.map((shift) => shift.requiredRole.toLowerCase()));
   const supervisorNeeded = shifts.some((shift) => shift.requiresSupervisor);
@@ -107,12 +140,14 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
     });
     const batches = isQwen3 ? chunkShifts(shifts, QWEN3_BATCH_SIZE) : [shifts];
     const proposals: ReturnType<typeof parseProposals> = [];
+    const rejected: { workerId?: string; shiftId?: string; reason: string }[] = [];
     const failedBatches: string[] = [];
     let completedBatches = 0;
     let retries = 0;
     for (const batch of batches) {
       const batchRequired = batch.reduce((total, shift) => total + shift.requiredWorkers, 0);
       let batchProposals: ReturnType<typeof parseProposals> = [];
+      let batchRejected: { workerId?: string; shiftId?: string; reason: string }[] = [];
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           const completion = await client.chat.completions.create(
@@ -135,14 +170,17 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
                     attempt ? "REPAIR: return valid assignments for every feasible position in this batch." : "",
                   ].filter(Boolean).join(" "),
                 },
-                { role: "user", content: JSON.stringify(buildPromptContext(getRelevantWorkers(workers, batch), batch)) },
+                { role: "user", content: JSON.stringify({ ...buildPromptContext(getRelevantWorkers(workers, batch), batch), priorAssignments: proposals, rejectedProposals: batchRejected }) },
               ],
             },
             { signal: AbortSignal.timeout(isLocalProvider ? 600_000 : isNvidiaNim ? 180_000 : 20_000) },
           );
           const content = completion.choices[0]?.message.content;
           if (!content) throw new Error("The scheduling model returned no content.");
-          batchProposals = parseProposals(content, workers, batch);
+          const parsedProposals = parseProposals(content, workers, batch);
+          const filtered = filterSafeProposals(parsedProposals, workers, batch, proposals);
+          batchProposals = filtered.accepted;
+          batchRejected = filtered.rejected;
           if (batchProposals.length >= batchRequired || attempt === 1) break;
           retries += 1;
         } catch {
@@ -152,6 +190,7 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
       }
       if (!isQwen3 && batchProposals.length === 0) throw new Error("The scheduling model returned no safe proposals.");
       if (batchProposals.length > 0) completedBatches += 1;
+      rejected.push(...batchRejected);
       for (const proposal of batchProposals) {
         if (!proposals.some((item) => item.workerId === proposal.workerId && item.shiftId === proposal.shiftId)) proposals.push(proposal);
       }
@@ -161,7 +200,7 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
     return {
       result,
       source: "openai",
-      proposalCoverage: { requested, proposed: proposals.length, coveragePercent, batches: batches.length, completedBatches, retries },
+      proposalCoverage: { requested, proposed: proposals.length, coveragePercent, batches: batches.length, completedBatches, retries, rejected: rejected.length, repairNeeded: Math.max(0, requested - proposals.length) },
       warning: proposals.length < requested || failedBatches.length
         ? "AI proposed " + proposals.length + " of " + requested + " positions across " + batches.length + " " + (isQwen3 ? "qwen3 batches" : "request") + "; the deterministic safety pass repaired the remainder." + (failedBatches.length ? " Failed batches: " + failedBatches.join(", ") + "." : "")
         : undefined,

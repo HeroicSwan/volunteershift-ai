@@ -60,6 +60,49 @@ function getRelevantWorkers(workers, shifts) {
   return relevant.length ? relevant : workers;
 }
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function minutes(value) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value || "");
+  return match ? Number(match[1]) * 60 + Number(match[2]) : Number.NaN;
+}
+function dayName(date) {
+  const parsed = new Date(String(date) + "T12:00:00Z");
+  return Number.isNaN(parsed.getTime()) ? "" : DAY_NAMES[parsed.getUTCDay()];
+}
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  return minutes(aStart) < minutes(bEnd) && minutes(aEnd) > minutes(bStart);
+}
+function filterProposals(values, workers, shifts, priorAssignments) {
+  const workerById = new Map(workers.map((worker) => [worker.id, worker]));
+  const shiftById = new Map(shifts.map((shift) => [shift.id, shift]));
+  const accepted = [];
+  const rejected = [];
+  const seen = new Set(priorAssignments.map((item) => item.workerId + ":" + item.shiftId));
+  for (const value of values) {
+    const worker = workerById.get(value?.workerId);
+    const shift = shiftById.get(value?.shiftId);
+    const reject = (reason) => rejected.push({ workerId: value?.workerId, shiftId: value?.shiftId, reason });
+    if (!isProposal(value, new Set(workerById.keys()), new Set(shiftById.keys()))) { reject("Invalid or hallucinated worker/shift ID."); continue; }
+    if (seen.has(value.workerId + ":" + value.shiftId)) { reject("Duplicate worker/shift assignment."); continue; }
+    if (minutes(value.startTime) < minutes(shift.startTime) || minutes(value.endTime) > minutes(shift.endTime) || minutes(value.endTime) <= minutes(value.startTime)) { reject("Assignment time is outside the shift window."); continue; }
+    if (shift.requiredRole && !worker.roles.some((role) => role.toLowerCase() === shift.requiredRole.toLowerCase())) { reject("Worker does not have the required role."); continue; }
+    const blocks = worker.availability?.[dayName(shift.date)] || [];
+    if (!blocks.some((block) => minutes(value.startTime) >= minutes(block.start) && minutes(value.endTime) <= minutes(block.end))) { reject("Worker is unavailable for this time."); continue; }
+    const workerAssignments = priorAssignments.filter((item) => item.workerId === worker.id).concat(accepted.filter((item) => item.workerId === worker.id));
+    if (workerAssignments.some((item) => item.shiftId !== shift.id && overlaps(value.startTime, value.endTime, item.startTime, item.endTime))) { reject("Worker overlaps another assignment."); continue; }
+    const weekHours = workerAssignments.filter((item) => item.shift?.date?.slice(0, 7) === shift.date.slice(0, 7)).reduce((sum, item) => sum + (minutes(item.endTime) - minutes(item.startTime)) / 60, 0);
+    const proposedHours = (minutes(value.endTime) - minutes(value.startTime)) / 60;
+    if (worker.maxHoursPerWeek !== undefined && weekHours + proposedHours > worker.maxHoursPerWeek) { reject("Worker would exceed the weekly hour limit."); continue; }
+    accepted.push({ ...value, shift, worker });
+    seen.add(value.workerId + ":" + value.shiftId);
+  }
+  return { accepted, rejected };
+}
+
+function planningState(assignments) {
+  return assignments.map((item) => ({ workerId: item.workerId, shiftId: item.shiftId, startTime: item.startTime, endTime: item.endTime, shift: item.shift }));
+}
+
 async function requestProposals(workers, shifts, config = {}) {
   const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
   const requiredAssignments = shifts.reduce((total, shift) => total + shift.requiredWorkers, 0);
@@ -84,10 +127,9 @@ async function requestProposals(workers, shifts, config = {}) {
       apiKey,
       baseURL: config.baseUrl || process.env.OPENAI_BASE_URL || undefined,
     });
-    const workerIds = new Set(workers.map((worker) => worker.id));
-    const shiftIds = new Set(shifts.map((shift) => shift.id));
     const batches = isQwen3 ? chunkShifts(shifts, QWEN3_BATCH_SIZE) : [shifts];
     const assignments = [];
+    const rejected = [];
     let completedBatches = 0;
     let retries = 0;
     const warnings = [];
@@ -96,6 +138,7 @@ async function requestProposals(workers, shifts, config = {}) {
       config.onProgress?.({ current: completedBatches + 1, total: batches.length, requested: requiredAssignments, proposed: assignments.length, status: "running" });
       const batchRequired = batch.reduce((total, shift) => total + shift.requiredWorkers, 0);
       let batchAssignments = [];
+      let batchRejected = [];
       let lastError;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
@@ -112,7 +155,7 @@ async function requestProposals(workers, shifts, config = {}) {
                   role: "system",
                   content: `${isQwen3 ? "You are planning one small batch of a weekly roster. " : ""}Return compact JSON only: {\"assignments\":[...]}. Use only supplied IDs. Each item needs workerId, shiftId, startTime, endTime, and optional reason. Respect availability, roles, supervisors, worker type, weekly limits, no overlaps, and headcount. Use staggered segments inside each shift. Never invent IDs; leave impossible work uncovered. No markdown. ${attempt ? "REPAIR: return valid assignments for every feasible position in this batch and nothing else." : ""}`,
                 },
-                { role: "user", content: JSON.stringify(buildPromptContext(getRelevantWorkers(workers, batch), batch)) },
+                { role: "user", content: JSON.stringify({ ...buildPromptContext(getRelevantWorkers(workers, batch), batch), priorAssignments: planningState(assignments), rejectedProposals: batchRejected }) },
               ],
             },
             { signal: config.signal ? AbortSignal.any([config.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) },
@@ -121,7 +164,9 @@ async function requestProposals(workers, shifts, config = {}) {
           if (!content) throw new Error("The scheduling model returned no content.");
           const parsed = JSON.parse(content);
           if (!Array.isArray(parsed.assignments)) throw new Error("The scheduling model returned no assignments.");
-          batchAssignments = parsed.assignments.filter((value) => isProposal(value, workerIds, shiftIds));
+          const filtered = filterProposals(parsed.assignments, workers, batch, assignments);
+          batchAssignments = filtered.accepted;
+          batchRejected = filtered.rejected;
           if (batchAssignments.length >= batchRequired || attempt === 1) break;
           retries += 1;
         } catch (error) {
@@ -132,6 +177,7 @@ async function requestProposals(workers, shifts, config = {}) {
       }
       if (lastError && batchAssignments.length === 0) warnings.push(`Batch ${batch[0]?.date ?? "unknown"} failed: ${lastError.message}`);
       if (batchAssignments.length > 0) completedBatches += 1;
+      rejected.push(...batchRejected);
       config.onProgress?.({ current: completedBatches, total: batches.length, requested: requiredAssignments, proposed: assignments.length + batchAssignments.length, status: "batch-complete" });
       for (const assignment of batchAssignments) {
         const key = `${assignment.workerId}:${assignment.shiftId}`;
@@ -142,7 +188,7 @@ async function requestProposals(workers, shifts, config = {}) {
     return {
       source: "openai",
       assignments,
-      proposalCoverage: { requested: requiredAssignments, proposed: assignments.length, coveragePercent, batches: batches.length, completedBatches, retries },
+      proposalCoverage: { requested: requiredAssignments, proposed: assignments.length, coveragePercent, batches: batches.length, completedBatches, retries, rejected: rejected.length, repairNeeded: Math.max(0, requiredAssignments - assignments.length) },
       warning: assignments.length < requiredAssignments || warnings.length
         ? (isNvidiaNim ? "NVIDIA NIM" : isLocalProvider ? "Ollama" : "AI provider") + " proposed " + assignments.length + " of " + requiredAssignments + " positions across " + batches.length + " " + (isQwen3 ? "qwen3 batches" : "request") + "; the deterministic safety pass will repair the remainder." + (warnings.length ? " " + warnings.join(" ") : "")
         : undefined,

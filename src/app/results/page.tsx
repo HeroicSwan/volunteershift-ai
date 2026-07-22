@@ -219,6 +219,8 @@ export default function ResultsPage() {
           <p className="mt-1 text-ink-soft">
             Ollama proposed {scheduleProposalCoverage.proposed} of {scheduleProposalCoverage.requested} requested positions across {scheduleProposalCoverage.batches} batch{scheduleProposalCoverage.batches === 1 ? "" : "es"}.
             {scheduleProposalCoverage.retries ? " " + scheduleProposalCoverage.retries + " repair " + (scheduleProposalCoverage.retries === 1 ? "attempt was" : "attempts were") + " made." : ""}
+            {scheduleProposalCoverage.rejected ? " " + scheduleProposalCoverage.rejected + " proposals were rejected by safety validation." : ""}
+            {scheduleProposalCoverage.repairNeeded ? " " + scheduleProposalCoverage.repairNeeded + " positions required deterministic repair." : ""}
             {" "}The deterministic safety layer validated and completed the schedule.
           </p>
         </Card>
