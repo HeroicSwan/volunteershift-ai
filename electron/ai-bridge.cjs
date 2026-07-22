@@ -1,5 +1,6 @@
 const MODEL_TIMEOUT_MS = 20_000;
 const LOCAL_MODEL_TIMEOUT_MS = 600_000;
+const NIM_TIMEOUT_MS = 600_000;
 const QWEN3_BATCH_SIZE = 4;
 
 function buildPromptContext(workers, shifts) {
@@ -121,7 +122,7 @@ async function requestProposals(workers, shifts, config = {}) {
     const model = config.model || process.env.OPENAI_MODEL || "gpt-5.4-mini";
     const isQwen3 = /qwen3/i.test(model);
     const isNvidiaNim = /integrate\.api\.nvidia\.com/i.test(baseUrl) || /nemotron/i.test(model);
-    const timeoutMs = isLocalProvider ? LOCAL_MODEL_TIMEOUT_MS : isNvidiaNim ? 180_000 : MODEL_TIMEOUT_MS;
+    const timeoutMs = isLocalProvider ? LOCAL_MODEL_TIMEOUT_MS : isNvidiaNim ? NIM_TIMEOUT_MS : MODEL_TIMEOUT_MS;
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,

@@ -173,7 +173,7 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
                 { role: "user", content: JSON.stringify({ ...buildPromptContext(getRelevantWorkers(workers, batch), batch), priorAssignments: proposals, rejectedProposals: batchRejected }) },
               ],
             },
-            { signal: AbortSignal.timeout(isLocalProvider ? 600_000 : isNvidiaNim ? 180_000 : 20_000) },
+            { signal: AbortSignal.timeout(isLocalProvider ? 600_000 : isNvidiaNim ? 600_000 : 20_000) },
           );
           const content = completion.choices[0]?.message.content;
           if (!content) throw new Error("The scheduling model returned no content.");
