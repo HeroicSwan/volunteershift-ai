@@ -5,6 +5,8 @@ import {
   type ScheduleAssignment,
   type Shift,
   type ShiftPriority,
+  type ScheduleGenerationSource,
+  type AiProposalCoverage,
   type VolunteerMatcherData,
   type Worker,
   type WorkerType,
@@ -55,6 +57,9 @@ type StoredData = {
   assignments?: StoredAssignment[];
   isSampleData?: boolean;
   scheduleGeneratedAt?: string;
+  scheduleGenerationSource?: ScheduleGenerationSource;
+  scheduleGenerationWarning?: string;
+  scheduleProposalCoverage?: AiProposalCoverage;
 };
 
 function normalizeWorker(worker: StoredWorker): Worker {
@@ -136,6 +141,9 @@ function normalizeData(data: StoredData): VolunteerMatcherData {
     }),
     isSampleData: data.isSampleData ?? false,
     scheduleGeneratedAt: data.scheduleGeneratedAt,
+    scheduleGenerationSource: data.scheduleGenerationSource,
+    scheduleGenerationWarning: data.scheduleGenerationWarning,
+    scheduleProposalCoverage: data.scheduleProposalCoverage,
   };
 }
 

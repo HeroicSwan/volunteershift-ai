@@ -1,6 +1,6 @@
 # Scheduling engine evaluations
 
-The `/evals` harness exercises the real deterministic scheduler exported by `src/lib/scheduler.ts`. It does not contain a second scheduler or a simplified test implementation. Every scenario calls `generateOptimizedSchedule()` with production `Worker`, `Shift`, and `ScheduleAssignment` shapes.
+The `/evals` harness exercises the real deterministic safety scheduler exported by `src/lib/scheduler.ts`. It does not contain a second scheduler or a simplified test implementation. Every scenario calls `generateOptimizedSchedule()` with production `Worker`, `Shift`, and `ScheduleAssignment` shapes. The live AI proposal path is separately guarded by the same safety engine; CI does not call an external model.
 
 ## What the harness tests
 

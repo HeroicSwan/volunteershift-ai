@@ -1,7 +1,7 @@
 # VolunteerShift AI
 
 **A nonprofit staffing scheduler for volunteers, paid employees, and supervisors.**
-Build a fair, fully-covered, cost-aware weekly schedule in a few clicks — with a transparent, deterministic optimizer you can actually explain to your board.
+Build a fair, fully-covered, cost-aware weekly schedule in a few clicks — with an AI planner backed by a transparent safety engine you can explain to your board.
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
@@ -52,7 +52,7 @@ Press **Generate**, and it produces a complete weekly schedule that:
 - **Covers every shift** it possibly can, staffing urgent and hard-to-fill work first
 - **Respects the rules** — role fit, availability, weekly shift/hour limits, no double-booking, required supervisors, and minimum/maximum paid staffing
 - **Keeps costs down** — once coverage is safe, it fills routine work with free volunteers and spends paid hours only where a rule or a shortage requires it
-- **Explains itself** — every assignment shows a 0–100 match score with plain-language reasons and warnings. **No black-box AI decides who works** — the scheduling is 100% deterministic logic you can audit and explain to your board.
+- **Explains itself** — every assignment shows a 0–100 match score with plain-language reasons and warnings. AI proposes the plan, while deterministic hard-constraint validation prevents unsafe assignments from being saved.
 
 Everything runs on your own device — **no account, no server, no database.** Your data is stored locally on your machine.
 
@@ -67,12 +67,12 @@ Volunteer coordinators, shift managers, and small-team leads who currently juggl
 | **Dashboard** | At-a-glance overview: team size, worker-hours needed, current coverage %, uncovered shifts, and weekly staffing demand. Load the demo workspace or jump straight to generating a schedule. |
 | **Staff** | Manage everyone on your team — volunteers, paid employees, and supervisors. Set roles, weekly availability by day/time block, preferred days & roles, reliability score, hourly rate (paid only), and weekly limits. Filter by type or role, and import/export as CSV. |
 | **Shifts** | Define each shift: date, time, location, required role, how many workers, priority, whether it **requires a supervisor**, and **min/max paid staff**. Import/export as CSV. |
-| **Generate** | One click builds the schedule with the deterministic optimizer and takes you to the results. |
+| **Generate** | Ask the AI planner to build the schedule, validate it against hard rules, and take you to the results. |
 | **Results** | The heart of the app — a monthly **calendar** (supervisors in red, paid staff in blue, volunteers in green, with names and times), plus **coverage %**, **estimated labor cost**, **staffing mix**, **fairness stats**, a **risk panel** flagging any at-risk shifts, and a per-assignment breakdown of match scores and reasons. Export the whole schedule to CSV. |
 
 ## How the scheduler works
 
-The optimizer is deterministic and explainable — the same inputs always produce the same schedule, and every decision is traceable.
+The AI planner proposes a schedule from the full roster and shift context. The deterministic safety engine then validates availability, roles, overlaps, worker types, hours, coverage, and fairness constraints. When no API key is configured or the AI response is unsafe, the deterministic engine generates the fallback schedule.
 
 1. **Hardest shifts first** — urgent/high-priority and scarce, hard-to-fill shifts are staffed before easy ones.
 2. **Rules before headcount** — each shift assigns its required supervisor and minimum paid staff *before* filling remaining spots.
@@ -162,7 +162,7 @@ The full adversarial command intentionally returns a nonzero exit code while two
 
 ## Configuration (optional)
 
-The Results page can include an AI-written summary of the schedule. It's **entirely optional** — without a key, a built-in assistant produces the same summary offline. To enable the AI version, copy `.env.example` to `.env.local` and add your own OpenAI key:
+The Generate and Results pages can use an AI planner and AI-written summary. It's **entirely optional** — without a key, the deterministic safety scheduler and built-in assistant keep the app usable offline. To enable the AI version, copy `.env.example` to `.env.local` and add your own OpenAI-compatible key:
 
 ```bash
 OPENAI_API_KEY=your-key-here
@@ -170,7 +170,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5.4-mini
 ```
 
-> The scheduling itself never uses AI — assignments are always deterministic. AI only writes an optional plain-English recap.
+> AI is used to propose assignments and write the optional recap. Every proposed assignment still passes through the deterministic safety engine, and the app falls back to deterministic scheduling when the AI service is unavailable.
 
 ## Desktop app (Windows / macOS / Linux)
 
@@ -190,6 +190,8 @@ npm run dev                                                    # terminal 1
 set ELECTRON_START_URL=http://localhost:3000 && npm run desktop  # terminal 2 (Windows)
 ```
 
+In the packaged desktop app, AI requests go through the Electron main-process IPC bridge. The renderer never receives the API key. For a local desktop run, provide the key to the process before launching (`$env:OPENAI_API_KEY="..."; npm run desktop` in PowerShell), or open Settings in the installed app to encrypt it with Electron's OS-backed `safeStorage`. Packaged builds never embed a key; without one, the app uses the deterministic safety fallback.
+
 ## Project structure
 
 ```
@@ -197,9 +199,10 @@ src/
   app/            # routes: dashboard, staff, shifts, generate, results, api
   components/     # UI, forms, dialogs, calendar, CSV import, results sections
   lib/
-    scheduler.ts  # the deterministic, cost-aware optimizer (+ tests)
+    scheduler.ts  # deterministic safety validation, repair, and fallback (+ tests)
     csv.ts        # CSV parsing, validation, export (+ tests)
     ai.ts         # optional AI summary with offline fallback (+ tests)
+    ai-scheduler.ts # AI schedule proposals with deterministic safety validation
     storage.ts    # localStorage persistence & migration
     sample-data.ts# the demo nonprofit workspace
   types/          # shared TypeScript types
@@ -213,7 +216,7 @@ src/
 
 | Generate | Results & calendar |
 | --- | --- |
-| ![Deterministic schedule generation screen](public/screenshots/generate.png) | ![Schedule results with coverage and monthly calendar](public/screenshots/results.png) |
+| ![AI-assisted schedule generation screen](public/screenshots/generate.png) | ![Schedule results with coverage and monthly calendar](public/screenshots/results.png) |
 
 ## License
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createSampleData, createTestStaff, createTestStaffShifts } from "@/lib/sample-data";
 import { generateOptimizedSchedule } from "@/lib/scheduler";
+import { buildScheduleFromAiProposals } from "@/lib/ai-schedule-proposals";
 import {
   getDataSnapshot,
   getServerDataSnapshot,
@@ -11,11 +12,11 @@ import {
 } from "@/lib/storage";
 import type {
   ImportMode,
-  OptimizedScheduleResult,
   ShiftInput,
   VolunteerMatcherData,
   WorkerInput,
 } from "@/types";
+import type { AiScheduleGeneration } from "@/lib/ai-scheduler";
 
 type DataContextValue = VolunteerMatcherData & {
   hydrated: boolean;
@@ -29,7 +30,9 @@ type DataContextValue = VolunteerMatcherData & {
   deleteShift: (id: string) => void;
   importWorkers: (workers: WorkerInput[], mode: ImportMode) => void;
   importShifts: (shifts: ShiftInput[], mode: ImportMode) => void;
-  generateSchedule: () => OptimizedScheduleResult;
+  generateSchedule: () => Promise<AiScheduleGeneration>;
+  scheduleProgress?: { current: number; total: number; requested: number; proposed: number; status: string };
+  cancelSchedule: () => Promise<void>;
 };
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -42,6 +45,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     () => false,
   );
   const data = useMemo<VolunteerMatcherData>(() => JSON.parse(snapshot), [snapshot]);
+  const [scheduleProgress, setScheduleProgress] = useState<DataContextValue["scheduleProgress"]>();
+
+  useEffect(() => {
+    const bridge = typeof window !== "undefined" ? window.volunteerShiftDesktop : undefined;
+    if (!bridge) return undefined;
+    return bridge.onScheduleProgress(setScheduleProgress);
+  }, []);
 
   function seedSampleData() {
     const sampleData = createSampleData();
@@ -179,14 +189,52 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
-  function generateSchedule() {
-    const result = generateOptimizedSchedule(data.workers, data.shifts);
+  async function generateSchedule() {
+    let generated: AiScheduleGeneration;
+    try {
+      const desktopBridge = typeof window !== "undefined" ? window.volunteerShiftDesktop : undefined;
+      if (desktopBridge) {
+        const proposalResponse = await desktopBridge.generateSchedule({ workers: data.workers, shifts: data.shifts });
+        generated = {
+          result: proposalResponse.source === "openai"
+            ? buildScheduleFromAiProposals(proposalResponse.assignments, data.workers, data.shifts)
+            : generateOptimizedSchedule(data.workers, data.shifts),
+          source: proposalResponse.source,
+          warning: proposalResponse.warning,
+          proposalCoverage: proposalResponse.proposalCoverage,
+        };
+      } else {
+        const response = await fetch("/api/generate-schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workers: data.workers, shifts: data.shifts }),
+        });
+        if (!response.ok) throw new Error("Schedule API request failed");
+        generated = (await response.json()) as AiScheduleGeneration;
+      }
+    } catch {
+      generated = {
+        result: generateOptimizedSchedule(data.workers, data.shifts),
+        source: "deterministic",
+        warning: "The AI scheduling service could not be reached, so the deterministic safety scheduler was used.",
+        proposalCoverage: { requested: data.shifts.reduce((total, shift) => total + shift.requiredWorkers, 0), proposed: 0, coveragePercent: 0, batches: 0, completedBatches: 0, retries: 0 },
+      };
+    }
     saveData({
       ...data,
-      assignments: result.assignments,
+      assignments: generated.result.assignments,
       scheduleGeneratedAt: new Date().toISOString(),
+      scheduleGenerationSource: generated.source,
+      scheduleGenerationWarning: generated.warning,
+      scheduleProposalCoverage: generated.proposalCoverage,
     });
-    return result;
+    setScheduleProgress(undefined);
+    return generated;
+  }
+
+  async function cancelSchedule() {
+    const bridge = typeof window !== "undefined" ? window.volunteerShiftDesktop : undefined;
+    if (bridge) await bridge.cancelSchedule();
   }
 
   return (
@@ -205,6 +253,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         importWorkers,
         importShifts,
         generateSchedule,
+        scheduleProgress,
+        cancelSchedule,
       }}
     >
       {children}

@@ -7,10 +7,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const apiDir = path.join(root, "src", "app", "api");
 const apiParked = path.join(root, "src", "app", "_api.parked");
 
-// A static export can't include server route handlers (the optional OpenAI
-// summary API). Park it during the desktop build so the export succeeds; the
-// desktop app falls back to the built-in offline schedule summary. The web /
-// Vercel build is unaffected — it never runs this script.
+// A static export can't include server route handlers (the AI schedule and
+// summary APIs). Park them during the desktop build so the export succeeds.
+// The desktop app uses its secure Electron main-process bridge for AI calls;
+// the web / Vercel build is unaffected and never runs this script.
 const parked = existsSync(apiDir);
 try {
   if (parked) renameSync(apiDir, apiParked);

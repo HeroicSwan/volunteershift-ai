@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Sparkles,
   UsersRound,
+  Settings,
 } from "lucide-react";
 import { useVolunteerMatcherData } from "@/components/data-provider";
 import { SeedDataButton } from "@/components/seed-data-button";
@@ -20,6 +21,7 @@ const navigation = [
   { href: "/shifts", label: "Shifts", icon: CalendarDays },
   { href: "/generate", label: "Generate", icon: Sparkles },
   { href: "/results", label: "Results", icon: HandHeart },
+  { href: "/settings", label: "Settings", icon: Settings },
   ...(process.env.NODE_ENV === "development"
     ? [{ href: "/admin/evaluations", label: "Evals", icon: FlaskConical }]
     : []),
@@ -112,7 +114,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <nav
         className={cn(
           "fixed inset-x-3 bottom-3 z-30 grid rounded-3xl border border-moss/15 bg-sand/95 p-1.5 shadow-[0_16px_40px_rgba(96,108,56,0.18)] backdrop-blur-xl lg:hidden",
-          navigation.length === 6 ? "grid-cols-6" : "grid-cols-5",
+          navigation.length === 5 ? "grid-cols-5" : navigation.length === 6 ? "grid-cols-6" : "grid-cols-7",
         )}
         aria-label="Mobile navigation"
       >

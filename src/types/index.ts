@@ -199,6 +199,19 @@ export type OptimizedScheduleResult = {
   validation: ScheduleValidationResult;
 };
 
+export type ScheduleGenerationSource = "openai" | "deterministic";
+
+export type AiProposalCoverage = {
+  requested: number;
+  proposed: number;
+  coveragePercent: number;
+  batches: number;
+  completedBatches: number;
+  retries: number;
+  rejected?: number;
+  repairNeeded?: number;
+};
+
 export type ShiftScheduleResult = {
   shiftId: string;
   assignedWorkers: ScheduleAssignment[];
@@ -252,6 +265,9 @@ export type VolunteerMatcherData = {
   assignments: ScheduleAssignment[];
   isSampleData: boolean;
   scheduleGeneratedAt?: string;
+  scheduleGenerationSource?: ScheduleGenerationSource;
+  scheduleGenerationWarning?: string;
+  scheduleProposalCoverage?: AiProposalCoverage;
 };
 
 export type WorkerInput = Omit<Worker, "id">;

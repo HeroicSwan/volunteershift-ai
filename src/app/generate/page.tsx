@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { ArrowRight, CalendarCheck, Check, RefreshCw, Sparkles, UsersRound } from "lucide-react";
 import { useVolunteerMatcherData } from "@/components/data-provider";
 import { SeedDataButton } from "@/components/seed-data-button";
@@ -15,26 +16,38 @@ import { getCoverageMetrics } from "@/lib/scheduler";
 
 const steps = [
   {
-    title: "Fill priority shifts first",
-    description: "Urgent and high-priority shifts are staffed before normal and low-priority work.",
+    title: "AI plans the week",
+    description: "The model considers priority, availability, preferences, roles, hours, and fairness together.",
   },
   {
-    title: "Honor staffing rules",
-    description: "Required supervisors and minimum paid staffing are assigned before the remaining spots.",
+    title: "Validate hard rules",
+    description: "Every proposed assignment is checked for availability, overlap, role, worker type, and hour limits.",
   },
   {
-    title: "Score every match",
-    description: "Availability, role fit, preferences, reliability, and current workload feed a 0–100 score.",
+    title: "Repair safe gaps",
+    description: "The production safety engine fills valid gaps and marks anything that cannot be safely covered.",
   },
   {
-    title: "Balance people and cost",
-    description: "Desired hours guide fairness, maximum hours prevent overtime, and volunteers receive shorter blocks.",
+    title: "Review before sharing",
+    description: "Results show the source, warnings, match reasons, and uncovered positions for coordinator approval.",
   },
 ];
 
 export default function GeneratePage() {
   const router = useRouter();
-  const { workers, shifts, assignments, scheduleGeneratedAt, hydrated, generateSchedule } = useVolunteerMatcherData();
+  const {
+    workers,
+    shifts,
+    assignments,
+    scheduleGeneratedAt,
+    scheduleGenerationSource,
+    scheduleGenerationWarning,
+    scheduleProgress,
+    hydrated,
+    generateSchedule,
+    cancelSchedule,
+  } = useVolunteerMatcherData();
+  const [isGenerating, setIsGenerating] = useState(false);
   const hasData = workers.length > 0 && shifts.length > 0;
   const requiredWorkerHours = getCoverageMetrics(shifts, []).requiredWorkerHours;
 
@@ -42,8 +55,9 @@ export default function GeneratePage() {
     return <PageLoading label="Loading schedule generator" />;
   }
 
-  function handleGenerate() {
-    generateSchedule();
+  async function handleGenerate() {
+    setIsGenerating(true);
+    await generateSchedule();
     router.push("/results");
   }
 
@@ -51,7 +65,7 @@ export default function GeneratePage() {
     <div className="space-y-7">
       <PageHeader
         title="Generate Schedule"
-        description="Build a deterministic staffing plan from availability, qualifications, preferences, and weekly limits."
+        description="Ask the AI planner to build a staffing plan, then validate every assignment against availability, roles, hours, and coverage rules."
       />
 
       {!hasData ? (
@@ -68,13 +82,13 @@ export default function GeneratePage() {
             <div className="relative">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone="moss">Ready to generate</Badge>
-                <Badge tone="oat">Deterministic matching</Badge>
+                <Badge tone="oat">AI-assisted planning</Badge>
               </div>
               <h2 className="mt-7 max-w-xl text-3xl font-semibold leading-tight tracking-[-0.045em] text-ink sm:text-4xl">
                 Turn availability into a balanced staffing plan.
               </h2>
               <p className="mt-4 max-w-xl text-sm leading-6 text-ink-soft sm:text-base">
-                The solver creates staggered start and end times, keeps paid shifts at eight hours or less, and treats weekly maximums as hard limits.
+                The AI planner balances priorities, preferences, hours, and coverage. A deterministic safety pass rejects invalid assignments and fills safe gaps when needed.
               </p>
 
               <div className="mt-8 grid gap-3 sm:grid-cols-3">
@@ -96,16 +110,34 @@ export default function GeneratePage() {
               </div>
 
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <Button onClick={handleGenerate}>
-                  {scheduleGeneratedAt ? <RefreshCw size={17} /> : <Sparkles size={17} />}
-                  {scheduleGeneratedAt ? "Regenerate schedule" : "Generate schedule"}
+                <Button onClick={handleGenerate} disabled={isGenerating}>
+                  {isGenerating ? <RefreshCw className="animate-spin" size={17} /> : scheduleGeneratedAt ? <RefreshCw size={17} /> : <Sparkles size={17} />}
+                  {isGenerating ? "Planning schedule…" : scheduleGeneratedAt ? "Regenerate schedule" : "Generate with AI"}
                 </Button>
+                {isGenerating && (
+                  <Button variant="secondary" onClick={() => void cancelSchedule()}>
+                    Cancel planning
+                  </Button>
+                )}
                 {scheduleGeneratedAt && (
                   <Link href="/results" className="inline-flex min-h-11 items-center gap-1.5 px-2 text-sm font-semibold text-moss hover:text-terracotta">
                     View {assignments.length} assignments <ArrowRight size={15} />
                   </Link>
                 )}
               </div>
+              {isGenerating && (
+                <p className="mt-3 text-xs text-ink-soft" role="status" aria-live="polite">
+                  {scheduleProgress
+                    ? "Planning batch " + scheduleProgress.current + " of " + scheduleProgress.total + "…"
+                    : "Starting Ollama… This can take several minutes on local hardware."}
+                </p>
+              )}
+              {scheduleGenerationSource && (
+                <p className="mt-4 text-xs text-ink-soft">
+                  Last run: {scheduleGenerationSource === "openai" ? "AI planner with safety validation" : "deterministic safety fallback"}.
+                  {scheduleGenerationWarning ? ` ${scheduleGenerationWarning}` : ""}
+                </p>
+              )}
             </div>
           </Card>
 
@@ -126,10 +158,10 @@ export default function GeneratePage() {
             </div>
             <div className="mt-7 rounded-3xl bg-moss p-5 text-sand">
               <div className="flex items-center gap-2 text-sm font-semibold">
-                <Check size={16} /> Same inputs, same schedule
+                <Check size={16} /> AI proposes, rules verify
               </div>
               <p className="mt-2 text-xs leading-5 text-sand/80">
-                Stable tie-breakers keep every run reproducible and easy to audit.
+                The model chooses the plan; hard constraints prevent unavailable, overlapping, unqualified, or overtime assignments from being saved.
               </p>
             </div>
           </Card>
