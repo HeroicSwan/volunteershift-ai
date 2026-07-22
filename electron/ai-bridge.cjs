@@ -1,5 +1,5 @@
 const MODEL_TIMEOUT_MS = 20_000;
-const LOCAL_MODEL_TIMEOUT_MS = 90_000;
+const LOCAL_MODEL_TIMEOUT_MS = 180_000;
 
 function buildPromptContext(workers, shifts) {
   return {
@@ -66,7 +66,8 @@ async function requestProposals(workers, shifts, config = {}) {
 
   try {
     const baseUrl = config.baseUrl || process.env.OPENAI_BASE_URL || "";
-    const timeoutMs = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl) ? LOCAL_MODEL_TIMEOUT_MS : MODEL_TIMEOUT_MS;
+    const isLocalProvider = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl);
+    const timeoutMs = isLocalProvider ? LOCAL_MODEL_TIMEOUT_MS : MODEL_TIMEOUT_MS;
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,
@@ -75,6 +76,7 @@ async function requestProposals(workers, shifts, config = {}) {
     const completion = await client.chat.completions.create(
       {
         model: config.model || process.env.OPENAI_MODEL || "gpt-5.4-mini",
+        ...(isLocalProvider ? { think: false } : {}),
         response_format: { type: "json_object" },
         messages: [
           {
