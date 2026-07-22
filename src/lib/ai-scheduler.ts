@@ -100,6 +100,7 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
     const isLocalProvider = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl);
     const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
     const isQwen3 = /qwen3/i.test(model);
+    const isNvidiaNim = /integrate\.api\.nvidia\.com/i.test(baseUrl) || /nemotron/i.test(model);
     const client = new OpenAI({
       apiKey,
       baseURL: baseUrl || undefined,
@@ -117,6 +118,9 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
           const completion = await client.chat.completions.create(
             {
               model,
+              temperature: 0,
+              ...(isQwen3 ? { max_tokens: 2048 } : {}),
+              ...(isNvidiaNim ? { max_tokens: 4096 } : {}),
               ...(isLocalProvider ? { think: false } : {}),
               response_format: { type: "json_object" },
               messages: [
@@ -134,7 +138,7 @@ export async function generateAiSchedule(workers: Worker[], shifts: Shift[]): Pr
                 { role: "user", content: JSON.stringify(buildPromptContext(getRelevantWorkers(workers, batch), batch)) },
               ],
             },
-            { signal: AbortSignal.timeout(isLocalProvider ? 600_000 : 20_000) },
+            { signal: AbortSignal.timeout(isLocalProvider ? 600_000 : isNvidiaNim ? 180_000 : 20_000) },
           );
           const content = completion.choices[0]?.message.content;
           if (!content) throw new Error("The scheduling model returned no content.");

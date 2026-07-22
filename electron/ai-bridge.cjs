@@ -77,7 +77,8 @@ async function requestProposals(workers, shifts, config = {}) {
     const isLocalProvider = /localhost|127\.0\.0\.1|\[::1\]/i.test(baseUrl);
     const model = config.model || process.env.OPENAI_MODEL || "gpt-5.4-mini";
     const isQwen3 = /qwen3/i.test(model);
-    const timeoutMs = isLocalProvider ? LOCAL_MODEL_TIMEOUT_MS : MODEL_TIMEOUT_MS;
+    const isNvidiaNim = /integrate\.api\.nvidia\.com/i.test(baseUrl) || /nemotron/i.test(model);
+    const timeoutMs = isLocalProvider ? LOCAL_MODEL_TIMEOUT_MS : isNvidiaNim ? 180_000 : MODEL_TIMEOUT_MS;
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey,
@@ -101,6 +102,9 @@ async function requestProposals(workers, shifts, config = {}) {
           const completion = await client.chat.completions.create(
             {
               model,
+              temperature: 0,
+              ...(isQwen3 ? { max_tokens: 2048 } : {}),
+              ...(isNvidiaNim ? { max_tokens: 4096 } : {}),
               ...(isLocalProvider ? { think: false } : {}),
               response_format: { type: "json_object" },
               messages: [
@@ -140,7 +144,7 @@ async function requestProposals(workers, shifts, config = {}) {
       assignments,
       proposalCoverage: { requested: requiredAssignments, proposed: assignments.length, coveragePercent, batches: batches.length, completedBatches, retries },
       warning: assignments.length < requiredAssignments || warnings.length
-        ? `Ollama proposed ${assignments.length} of ${requiredAssignments} positions across ${batches.length} ${isQwen3 ? "qwen3 batches" : "request"}; the deterministic safety pass will repair the remainder.${warnings.length ? ` ${warnings.join(" ")}` : ""}`
+        ? (isNvidiaNim ? "NVIDIA NIM" : isLocalProvider ? "Ollama" : "AI provider") + " proposed " + assignments.length + " of " + requiredAssignments + " positions across " + batches.length + " " + (isQwen3 ? "qwen3 batches" : "request") + "; the deterministic safety pass will repair the remainder." + (warnings.length ? " " + warnings.join(" ") : "")
         : undefined,
     };
   } catch (error) {
